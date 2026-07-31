@@ -50,5 +50,29 @@ namespace TiltBrush
             }
         }
 
+        [ApiEndpoint("colocation.host", "Hosts a Meta Quest colocation session")]
+        public static void ColocationHost()
+        {
+            if (!ColocationBootstrap.Host(MultiplayerManager.m_Instance.MyOculusUserId))
+            {
+                Debug.LogWarning("Colocation is unsupported or has not finished initializing.");
+            }
+        }
+
+        [ApiEndpoint("colocation.join", "Joins a Meta Quest colocation session")]
+        public static void ColocationJoin()
+        {
+            if (!ColocationBootstrap.Join(MultiplayerManager.m_Instance.MyOculusUserId))
+            {
+                Debug.LogWarning("Colocation is unsupported or has not finished initializing.");
+            }
+        }
+
+        [ApiEndpoint("colocation.leave", "Leaves the current Meta Quest colocation session")]
+        public static void ColocationLeave()
+        {
+            ColocationBootstrap.Leave();
+        }
+
     }
 }

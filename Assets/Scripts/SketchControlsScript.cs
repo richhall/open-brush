@@ -174,6 +174,9 @@ namespace TiltBrush
 
             MultiplayerSetRoomViewOnly = 1020,
             MultiplayerSetRoomSilent = 1021,
+            MultiplayerColocationHost = 1022,
+            MultiplayerColocationJoin = 1023,
+            MultiplayerToggleHideRemoteAvatars = 1024,
 
             RenameSketch = 5200,
             OpenLayerOptionsPopup = 5201,
@@ -5149,6 +5152,9 @@ namespace TiltBrush
                 case GlobalCommands.MultiplayerKickPlayerOut:
                 case GlobalCommands.MultiplayerMuteAllForAll:
                 case GlobalCommands.MultiplayerPlayerMuteForAll:
+                case GlobalCommands.MultiplayerColocationHost:
+                case GlobalCommands.MultiplayerColocationJoin:
+                case GlobalCommands.MultiplayerToggleHideRemoteAvatars:
                 case GlobalCommands.WhatIsNew:
                 case GlobalCommands.LoginToIcosa:
                 case GlobalCommands.OpenIcosaPanelOptionsPopup:
@@ -5449,6 +5455,14 @@ namespace TiltBrush
                     return !PanelManager.m_Instance.AdvancedModeActive() && MultiplayerManager.m_Instance.CanJoinRoom();
                 case GlobalCommands.MultiplayerLeaveRoom:
                     return MultiplayerManager.m_Instance.CanLeaveRoom();
+
+                // Colocation actions only make sense once actually in a room, and only on
+                // builds where colocation is actually possible (Quest/Oculus + Photon) - see
+                // ColocationBootstrap.IsSupported for why this can't just be a compile guard.
+                case GlobalCommands.MultiplayerColocationHost:
+                case GlobalCommands.MultiplayerColocationJoin:
+                    return MultiplayerManager.m_Instance.State == ConnectionState.IN_ROOM &&
+                        ColocationBootstrap.IsSupported;
 
                 // Disabled when in a multiplayer room.
                 case GlobalCommands.Sketchbook:

@@ -246,11 +246,23 @@ namespace OpenBrush.Multiplayer
                 );
                 App.Scene.AsScene[rightHandTransform] = remoteRightTR;
 
+                // Local, per-device preference (MultiplayerManager.HideRemotePlayerAvatars) -
+                // checked every frame rather than only at Spawned() so it reacts live if
+                // toggled mid-session. Only the visual models are affected - transform tracking
+                // above and transientPointer (which drives brushstroke rendering) are untouched,
+                // so strokes stay fully visible regardless of this setting.
+                UpdateControllerVisibility();
+
                 //HMD color
                 if (isReceivingVoiceTransmission) FadeHMDMeshColor(Color.red);
                 else FadeHMDMeshColor(originalColor);
             }
         }
+
+        // Tracks the last-applied value so the log below only fires on an actual change,
+        // not every frame - UpdateControllerVisibility() runs continuously from Render() for
+        // remote rigs.
+        private bool? m_LastAppliedHideRemoteAvatars;
 
         public void UpdateControllerVisibility()
         {
@@ -261,8 +273,20 @@ namespace OpenBrush.Multiplayer
             }
             else
             {
-                m_LeftControllerModel.SetActive(true);
-                m_RightControllerModel.SetActive(true);
+                bool hideRemoteAvatars = MultiplayerManager.m_Instance != null &&
+                    MultiplayerManager.m_Instance.HideRemotePlayerAvatars;
+                m_LeftControllerModel.SetActive(!hideRemoteAvatars);
+                m_RightControllerModel.SetActive(!hideRemoteAvatars);
+                if (HMDMeshRenderer != null) HMDMeshRenderer.enabled = !hideRemoteAvatars;
+                if (NicknameText != null) NicknameText.gameObject.SetActive(!hideRemoteAvatars);
+
+                if (m_LastAppliedHideRemoteAvatars != hideRemoteAvatars)
+                {
+                    Debug.Log($"[Multiplayer] Remote rig avatar visibility applied: hideRemoteAvatars={hideRemoteAvatars} " +
+                        $"(MultiplayerManager.m_Instance null: {MultiplayerManager.m_Instance == null}, " +
+                        $"HMDMeshRenderer null: {HMDMeshRenderer == null}).");
+                    m_LastAppliedHideRemoteAvatars = hideRemoteAvatars;
+                }
             }
         }
 

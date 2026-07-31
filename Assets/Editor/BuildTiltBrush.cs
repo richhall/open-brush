@@ -1052,6 +1052,7 @@ static class BuildTiltBrush
         private string m_company;
         private bool m_IsAndroidOrIos;
         private BuildTarget m_Target;
+        private int m_prevVersionCode;
         public TempSetAppNames(BuildTarget target, string Description)
         {
             m_Target = target;
@@ -1059,6 +1060,7 @@ static class BuildTiltBrush
             m_identifier = PlayerSettings.GetApplicationIdentifier(TargetToGroup(target));
             m_name = PlayerSettings.productName;
             m_company = PlayerSettings.companyName;
+            m_prevVersionCode = PlayerSettings.Android.bundleVersionCode;
             string new_name = App.kAppDisplayName;
 
             string new_identifier = m_identifier;
@@ -1074,9 +1076,32 @@ static class BuildTiltBrush
                     break;
             }
 
+            // Set to true by the CollusionBrush workaround below - the identifier must exactly
+            // match what's registered on the Meta dashboard, so it must not get the
+            // Description-suffix treatment every other identifier gets further down.
+            bool identifierMustMatchExactly = false;
 #if OCULUS_SUPPORTED || USE_QUEST_PACKAGE_NAME
-            //Can't change Quest identifier
-            new_identifier = "com.Icosa.OpenBrush";
+            // TEMP DEV WORKAROUND (remove once colocation testing moves off the CollusionBrush
+            // Meta app): the OpenBrush App ID (Assets/Resources/OculusPlatformSettings.asset)
+            // has no entitlement on this dev's Meta account, so GetLoggedInUser()/entitlement
+            // checks fail. Overriding to the package name registered against the CollusionBrush App ID
+            // (uk.org.collusion.MRMotifs, confirmed against the dashboard's Alpha channel
+            // listing) so colocation can actually be tested end-to-end. Revert to
+            // "com.Icosa.OpenBrush" for any real Open Brush build.
+            new_identifier = "uk.org.collusion.MRMotifs";
+            identifierMustMatchExactly = true;
+            // The dashboard's existing Alpha build (v0.6) is versionCode 6, and it rejects any
+            // upload that isn't strictly higher than the last one it received - auto-increment
+            // per build (starting from 100) rather than a fixed value, so repeated test
+            // uploads don't need this bumped by hand each time. EditorPrefs rather than a repo
+            // file since this is a per-machine, temporary-workaround counter, not project state.
+            // Default fallback is 100 (not 99) so the first build under this scheme produces
+            // 101, not 100 - 100 was already uploaded and rejected by the dashboard once this
+            // fix was needed, so repeating it here would just recreate the same failure.
+            const string versionCodeKey = "OpenBrush_Colocation_MRMotifs_VersionCode";
+            int nextVersionCode = EditorPrefs.GetInt(versionCodeKey, 100) + 1;
+            EditorPrefs.SetInt(versionCodeKey, nextVersionCode);
+            PlayerSettings.Android.bundleVersionCode = nextVersionCode;
 #elif ZAPBOX_SUPPORTED
             // Zapbox has a separate listing
             new_identifier = "foundation.icosa.openbrushzapbox";
@@ -1086,7 +1111,10 @@ static class BuildTiltBrush
             if (!String.IsNullOrEmpty(Description))
             {
                 new_name += "-(" + Description.Replace("#", "") + ")";
-                new_identifier += "-" + Description.Replace("_", "").Replace("#", "").Replace("-", "");
+                if (!identifierMustMatchExactly)
+                {
+                    new_identifier += "-" + Description.Replace("_", "").Replace("#", "").Replace("-", "");
+                }
             }
             if (m_IsAndroidOrIos)
             {
@@ -1104,6 +1132,7 @@ static class BuildTiltBrush
             }
             PlayerSettings.productName = m_name;
             PlayerSettings.companyName = m_company;
+            PlayerSettings.Android.bundleVersionCode = m_prevVersionCode;
         }
     }
 

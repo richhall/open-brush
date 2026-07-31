@@ -3799,6 +3799,18 @@ MonoBehaviour:
       Worlds.'
     m_Metadata:
       m_Items: []
+  - m_Id: 526574587835465728
+    m_Localized: Host colocation
+    m_Metadata:
+      m_Items: []
+  - m_Id: 526575383494934528
+    m_Localized: Join colocation
+    m_Metadata:
+      m_Items: []
+  - m_Id: 526579304087044096
+    m_Localized: Toggle avatars
+    m_Metadata:
+      m_Items: []
   references:
     version: 2
     RefIds: []

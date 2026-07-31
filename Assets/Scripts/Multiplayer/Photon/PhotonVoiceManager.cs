@@ -79,6 +79,7 @@ public class PhotonVoiceManager : IVoiceConnectionHandler, IConnectionCallbacks,
         {
             State = ConnectionState.ERROR;
             LastError = $"[PhotonVoiceManager] Failed to Initialize lobby: {ex.Message}";
+            Debug.LogError(LastError);
             ControllerConsoleScript.m_Instance.AddNewLine(LastError);
             return false;
         }
@@ -120,6 +121,7 @@ public class PhotonVoiceManager : IVoiceConnectionHandler, IConnectionCallbacks,
         {
             State = ConnectionState.ERROR;
             LastError = $"[PhotonVoiceManager] Failed to connect.";
+            Debug.LogError(LastError);
             ControllerConsoleScript.m_Instance.AddNewLine(LastError);
         }
 
@@ -151,6 +153,7 @@ public class PhotonVoiceManager : IVoiceConnectionHandler, IConnectionCallbacks,
         {
             State = ConnectionState.ERROR;
             LastError = $"[PhotonVoiceManager] Failed to join or create room";
+            Debug.LogError(LastError);
             ControllerConsoleScript.m_Instance.AddNewLine(LastError);
         }
 
@@ -187,6 +190,7 @@ public class PhotonVoiceManager : IVoiceConnectionHandler, IConnectionCallbacks,
         else
         {
             State = ConnectionState.ERROR;
+            Debug.LogError("[PhotonVoiceManager] Failed to leave the room.");
             ControllerConsoleScript.m_Instance.AddNewLine("[PhotonVoiceManager] Failed to leave the room.");
             return false;
         }
@@ -220,6 +224,7 @@ public class PhotonVoiceManager : IVoiceConnectionHandler, IConnectionCallbacks,
         else
         {
             State = ConnectionState.ERROR;
+            Debug.LogError("[PhotonVoiceManager] Failed to disconnect from Server.");
             ControllerConsoleScript.m_Instance.AddNewLine("[PhotonVoiceManager] Failed to disconnect from Server.");
             return false;
         }
@@ -299,6 +304,7 @@ public class PhotonVoiceManager : IVoiceConnectionHandler, IConnectionCallbacks,
         ClearMicrophonePermissionRequest();
         m_StartSpeakingWhenMicrophonePermissionGranted = false;
         LastError = "[PhotonVoiceManager] Microphone permission was denied.";
+        Debug.LogError(LastError);
         ControllerConsoleScript.m_Instance.AddNewLine(LastError);
     }
 #endif

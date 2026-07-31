@@ -16,7 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-#if MP_FUSION
+#if MP_PHOTON
 using Fusion;
 #endif
 using UnityEngine;
@@ -62,10 +62,25 @@ namespace OpenBrush.Multiplayer
         private double? m_NetworkOffsetTimestamp = null;
 
         ulong myOculusUserId;
+        // Read-only so callers (e.g. colocation.host/colocation.join in
+        // Assets/Scripts/API/ApiMethods.Multiplayer.cs) can't accidentally desync this from
+        // the value MultiplayerManager itself resolved via the Oculus Platform SDK.
+        public ulong MyOculusUserId => myOculusUserId;
 
         List<ulong> oculusPlayerIds;
         internal string UserId;
         [HideInInspector] public string CurrentRoomName;
+
+        // Local, per-device rendering preference - never networked or synced to other players.
+        // Each device decides independently whether it wants to see other players' headset/
+        // controller models, e.g. a static recording rig wants brushstrokes only, with nobody
+        // else's avatar cluttering the shot. Persisted so it survives app restarts.
+        private const string kHideRemotePlayerAvatarsPrefKey = "MultiplayerHideRemotePlayerAvatars";
+        public bool HideRemotePlayerAvatars
+        {
+            get => PlayerPrefs.GetInt(kHideRemotePlayerAvatarsPrefKey, 0) == 1;
+            set => PlayerPrefs.SetInt(kHideRemotePlayerAvatarsPrefKey, value ? 1 : 0);
+        }
 
         private ConnectionState _state;
 
@@ -83,6 +98,16 @@ namespace OpenBrush.Multiplayer
         }
 
         public string LastError { get; private set; }
+
+#if MP_PHOTON
+        // Colocation (OpenBrush.Multiplayer.Colocation.ColocationBootstrap) needs the live
+        // NetworkRunner to construct PhotonColocationSignalling - m_Manager has no other
+        // public way to expose it, since IDataConnectionHandler stays backend-agnostic.
+        // MP_FUSION (used elsewhere in this file's own using directive) is not actually a
+        // defined scripting symbol in this project (see ProjectSettings.asset) - MP_PHOTON is
+        // the real one, matching PhotonManager.cs/PhotonRPC.cs's own guard.
+        public NetworkRunner Runner => (m_Manager as PhotonManager)?.Runner;
+#endif
 
         public ConnectionUserInfo UserInfo
         {
@@ -137,18 +162,72 @@ namespace OpenBrush.Multiplayer
         void Start()
         {
 #if OCULUS_SUPPORTED
-            OVRPlatform.Users.GetLoggedInUser().OnComplete((msg) => {
-                if (!msg.IsError)
+            // TEMP DEV WORKAROUND (remove once root cause is fixed): on this dev machine's PC/Link build,
+            // com.meta.xr.sdk.platform ships no Windows LibOVRPlatform64_1.dll (Android-only in this
+            // package version), so Oculus.Platform.Core.Initialize() throws DllNotFoundException and
+            // GetLoggedInUser() returns null here, crashing the rest of Start() before Photon ever
+            // connects. Not believed to reproduce in production (properly published/signed builds,
+            // launched via the real Oculus/Meta Quest Link library rather than a raw .exe).
+            // Only affects Oculus-account-based spatial anchor sharing (colocation) below - core Photon
+            // Fusion multiplayer (strokes/avatars) does not depend on myOculusUserId/oculusPlayerIds.
+            try
+            {
+                // DIAGNOSTIC (2026-07-28): investigating GetLoggedInUser() returning a fast,
+                // error-free "success" with ID=0 on Android sideloaded builds - per Meta's own
+                // docs an entitlement check should run before user-data calls, and this was
+                // entirely missing from the codebase. Logging both Platform's actual init state
+                // and a real entitlement check result so we know definitively whether this is
+                // Data-Use-Checkup/entitlement related (external, dashboard-side) versus
+                // something else, rather than continuing to guess from response timing alone.
+                bool platformInitialized = OVRPlatform.Core.IsInitialized();
+                Debug.Log($"[Diagnostic] Oculus Platform Core.IsInitialized() = {platformInitialized}");
+
+                // IsUserEntitledToApplication() returns null (not a failed Request) when the
+                // platform isn't initialized - guarded explicitly here, in its own try/catch,
+                // so a null OnComplete() call can never suppress the GetLoggedInUser() call
+                // below it.
+                if (platformInitialized)
                 {
-                    myOculusUserId = msg.GetUser().ID;
-                    Debug.Log($"OculusID: {myOculusUserId}");
-                    oculusPlayerIds.Add(myOculusUserId);
+                    try
+                    {
+                        OVRPlatform.Entitlements.IsUserEntitledToApplication().OnComplete((entitlementMsg) => {
+                            if (!entitlementMsg.IsError)
+                            {
+                                Debug.Log("[Diagnostic] Entitlement check PASSED - user is entitled to this application.");
+                            }
+                            else
+                            {
+                                Debug.LogError($"[Diagnostic] Entitlement check FAILED: {entitlementMsg.GetError()}");
+                            }
+                        });
+                    }
+                    catch (Exception entitlementEx)
+                    {
+                        Debug.LogError($"[Diagnostic] Entitlement check threw: {entitlementEx.Message}");
+                    }
                 }
                 else
                 {
-                    Debug.LogError(msg.GetError());
+                    Debug.LogWarning("[Diagnostic] Skipping entitlement check - Oculus Platform Core is not initialized.");
                 }
-            });
+
+                OVRPlatform.Users.GetLoggedInUser().OnComplete((msg) => {
+                    if (!msg.IsError)
+                    {
+                        myOculusUserId = msg.GetUser().ID;
+                        Debug.Log($"OculusID: {myOculusUserId}");
+                        oculusPlayerIds.Add(myOculusUserId);
+                    }
+                    else
+                    {
+                        Debug.LogError(msg.GetError());
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[TEMP WORKAROUND] Skipping Oculus user lookup - Platform not available: {ex.Message}");
+            }
 #endif
 
             State = ConnectionState.INITIALIZING;

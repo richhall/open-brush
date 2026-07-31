@@ -3631,6 +3631,18 @@ MonoBehaviour:
     m_Key: SNAP_SETTINGS_PANEL_TOGGLE_Z_ROTATION_SNAP
     m_Metadata:
       m_Items: []
+  - m_Id: 526574587835465728
+    m_Key: MP_COLOCATION_HOST
+    m_Metadata:
+      m_Items: []
+  - m_Id: 526575383494934528
+    m_Key: MP_COLOCATION_JOIN
+    m_Metadata:
+      m_Items: []
+  - m_Id: 526579304087044096
+    m_Key: MP_TOGGLE_AVATARS
+    m_Metadata:
+      m_Items: []
   m_Metadata:
     m_Items: []
   m_KeyGenerator:

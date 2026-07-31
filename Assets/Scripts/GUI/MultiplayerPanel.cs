@@ -44,6 +44,8 @@ namespace TiltBrush
         [SerializeField] private LocalizedString m_AlertsRoomAlreadyExistent;
         [SerializeField] private LocalizedString m_AlertsPassthroughWarning;
         [SerializeField] private GameObject m_RoomSettingsButton;
+        [SerializeField] private GameObject m_ColocationHostButton;
+        [SerializeField] private GameObject m_ColocationJoinButton;
 
         private PlayerPrefsDataStore m_multiplayer;
         private bool updateDisplay = false;
@@ -272,6 +274,29 @@ namespace TiltBrush
             }
         }
 
+        private void ColocationHost()
+        {
+            if (MultiplayerManager.m_Instance != null)
+            {
+                ColocationBootstrap.Host(MultiplayerManager.m_Instance.MyOculusUserId);
+            }
+        }
+
+        private void ColocationJoin()
+        {
+            if (MultiplayerManager.m_Instance != null)
+            {
+                ColocationBootstrap.Join(MultiplayerManager.m_Instance.MyOculusUserId);
+            }
+        }
+
+        private void DisplayColocationButtons(ConnectionState newState)
+        {
+            bool show = newState == ConnectionState.IN_ROOM && ColocationBootstrap.IsSupported;
+            if (m_ColocationHostButton) m_ColocationHostButton.SetActive(show);
+            if (m_ColocationJoinButton) m_ColocationJoinButton.SetActive(show);
+        }
+
         private void OnStateUpdated(ConnectionState newState)
         {
             if (!m_State) return;
@@ -287,6 +312,7 @@ namespace TiltBrush
                 m_RoomAvailable.gameObject.SetActive(true);
             }
             DisplayRoomSettingsButton(newState);
+            DisplayColocationButtons(newState);
             UpdateDisplay();
         }
 
@@ -431,7 +457,7 @@ namespace TiltBrush
             }
         }
 
-        public void OnMultiplayerPanelButtonPressed(MultiplayerPanelButton button)
+        public void OnMultiplayerPanelButtonPressed(OptionButton button)
         {
             switch (button.m_Command)
             {
@@ -460,6 +486,23 @@ namespace TiltBrush
                     break;
                 case SketchControlsScript.GlobalCommands.MultiplayerDisconnect:
                     Disconnect();
+                    break;
+                case SketchControlsScript.GlobalCommands.MultiplayerColocationHost:
+                    ColocationHost();
+                    break;
+                case SketchControlsScript.GlobalCommands.MultiplayerColocationJoin:
+                    ColocationJoin();
+                    break;
+                case SketchControlsScript.GlobalCommands.MultiplayerToggleHideRemoteAvatars:
+                    if (MultiplayerManager.m_Instance != null && button is ToggleButton toggleButton)
+                    {
+                        MultiplayerManager.m_Instance.HideRemotePlayerAvatars = toggleButton.IsToggledOn;
+                        Debug.Log($"[Multiplayer] HideRemotePlayerAvatars set to {toggleButton.IsToggledOn}.");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[Multiplayer] MultiplayerToggleHideRemoteAvatars pressed but MultiplayerManager.m_Instance is null or button ({button?.GetType().Name}) is not a ToggleButton.");
+                    }
                     break;
             }
         }

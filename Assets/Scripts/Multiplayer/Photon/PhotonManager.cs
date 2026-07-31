@@ -43,6 +43,7 @@ namespace OpenBrush.Multiplayer
         public ConnectionUserInfo UserInfo { get; set; }
         public ConnectionState State { get; private set; }
         public string LastError { get; private set; }
+        public NetworkRunner Runner => m_Runner;
 
         public PhotonManager(MultiplayerManager manager)
         {
@@ -76,6 +77,7 @@ namespace OpenBrush.Multiplayer
             {
                 State = ConnectionState.ERROR;
                 LastError = $"[PhotonManager] Failed to Initialize lobby: {ex.Message}";
+                Debug.LogError(LastError);
                 ControllerConsoleScript.m_Instance.AddNewLine(LastError);
                 return false;
             }
@@ -129,6 +131,7 @@ namespace OpenBrush.Multiplayer
             {
                 State = ConnectionState.ERROR;
                 LastError = $"[PhotonManager] Failed to join lobby: {result.ErrorMessage}";
+                Debug.LogError(LastError);
                 ControllerConsoleScript.m_Instance.AddNewLine(LastError);
             }
 
@@ -173,6 +176,7 @@ namespace OpenBrush.Multiplayer
                 {
                     State = ConnectionState.ERROR;
                     LastError = "[PhotonManager] Room is full.";
+                    Debug.LogError(LastError);
                     ControllerConsoleScript.m_Instance.AddNewLine(LastError);
                     Disconnect();
                     return false;
@@ -190,6 +194,7 @@ namespace OpenBrush.Multiplayer
             {
                 State = ConnectionState.ERROR;
                 LastError = $"[PhotonManager] Failed to join Room: {result.ErrorMessage}";
+                Debug.LogError(LastError);
                 ControllerConsoleScript.m_Instance.AddNewLine(LastError);
             }
 
@@ -229,6 +234,7 @@ namespace OpenBrush.Multiplayer
                 {
                     State = ConnectionState.ERROR;
                     LastError = $"[PhotonManager] Failed to disconnect";
+                    Debug.LogError(LastError);
                     ControllerConsoleScript.m_Instance.AddNewLine(LastError);
                 }
 
@@ -638,6 +644,10 @@ namespace OpenBrush.Multiplayer
         #region Unused Photon Callbacks 
         public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
         {
+            // Was silently discarded - logging it to confirm/deny whether room disconnects on
+            // headset-off are Fusion's own connection-timeout kicking in (e.g. ShutdownReason.
+            // ConnectionTimeout/PhotonCloudTimeout) versus something else entirely.
+            Debug.Log($"[PhotonManager] OnShutdown: {shutdownReason}");
             Disconnected?.Invoke();
         }
         public void OnDisconnectedFromServer(NetworkRunner runner) { }

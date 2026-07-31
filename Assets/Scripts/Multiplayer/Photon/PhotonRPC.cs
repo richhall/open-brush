@@ -624,6 +624,64 @@ namespace OpenBrush.Multiplayer
             }
         }
 
+        // --- Colocation signalling (OpenBrush.Multiplayer.Colocation.ISignallingService) ---
+        // Broadcast rather than targeted where the receiving ColocationManager already
+        // self-filters by role/state (host-ready, join-request, localization-result) - only
+        // the anchor UUID needs a real target, since leaking it to the wrong peer is the
+        // specific issue COLOCATION_MVP_PLAN.md flags with Andy's original broadcast RPC.
+        //
+        // (2026-07-28: these were temporarily disabled via #if false to test a suspected
+        // Fusion RPC-weaver regression against a basic-multiplayer-instability report.
+        // Reinstated after the same instability was still reproduced with these disabled,
+        // ruling that hypothesis out.)
+
+        // Each receiver logs explicitly when PhotonColocationSignalling.m_Instance is null,
+        // rather than letting "?." silently swallow the RPC - that's exactly the failure mode
+        // this logging pass was added to rule in/out (see PhotonColocationSignalling.cs).
+        [Rpc(InvokeLocal = false)]
+        public static void RPC_ColocationHostReady(NetworkRunner runner)
+        {
+            if (PhotonColocationSignalling.m_Instance == null)
+            {
+                Debug.LogError("[Colocation] RPC_ColocationHostReady arrived but PhotonColocationSignalling.m_Instance is null - dropped.");
+                return;
+            }
+            PhotonColocationSignalling.m_Instance.RaiseHostReadyReceived();
+        }
+
+        [Rpc(InvokeLocal = false)]
+        public static void RPC_ColocationRequestToJoin(NetworkRunner runner, ulong metaUserId)
+        {
+            if (PhotonColocationSignalling.m_Instance == null)
+            {
+                Debug.LogError($"[Colocation] RPC_ColocationRequestToJoin arrived (Meta user {metaUserId}) but PhotonColocationSignalling.m_Instance is null - dropped.");
+                return;
+            }
+            PhotonColocationSignalling.m_Instance.RaiseJoinRequestReceived(metaUserId);
+        }
+
+        [Rpc(InvokeLocal = false)]
+        public static void RPC_ColocationAnchorUuid(NetworkRunner runner, string anchorUuid, [RpcTarget] PlayerRef targetPlayer)
+        {
+            if (PhotonColocationSignalling.m_Instance == null)
+            {
+                Debug.LogError("[Colocation] RPC_ColocationAnchorUuid arrived but PhotonColocationSignalling.m_Instance is null - dropped.");
+                return;
+            }
+            PhotonColocationSignalling.m_Instance.RaiseAnchorUuidReceived(anchorUuid);
+        }
+
+        [Rpc(InvokeLocal = false)]
+        public static void RPC_ColocationLocalizationResult(NetworkRunner runner, bool success, string failureReason, RpcInfo info = default)
+        {
+            if (PhotonColocationSignalling.m_Instance == null)
+            {
+                Debug.LogError($"[Colocation] RPC_ColocationLocalizationResult arrived (success={success}) but PhotonColocationSignalling.m_Instance is null - dropped.");
+                return;
+            }
+            PhotonColocationSignalling.m_Instance.RaiseLocalizationResultReceived(info.Source, success, failureReason);
+        }
+
         #endregion
     }
 }
