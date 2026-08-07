@@ -38,6 +38,14 @@ namespace OpenBrush.Multiplayer
         private PhotonPlayerRig m_LocalPlayer;
         private FusionAppSettings m_PhotonAppSettings;
         private int sequenceNumber = 0;
+
+        // Live stroke streaming (fluid remote rendering) sender state - see
+        // UpdateLiveStrokeStream() and PhotonRPC.cs's live preview RPCs. Only the main pointer is
+        // covered; multi-pointer (symmetry) drawing falls back to the existing burst-send-at-
+        // completion behaviour untouched, out of scope for this pass.
+        private int? m_LiveStrokeSeed;
+        private int m_LiveStrokePointsSent;
+        private float m_LiveStrokeLastFlushRealtime;
         public event Action Disconnected;
 
         public ConnectionUserInfo UserInfo { get; set; }
@@ -107,6 +115,79 @@ namespace OpenBrush.Multiplayer
                     m_PlayersSpawning.Remove(player);
                 }
             }
+
+            UpdateLiveStrokeStream();
+        }
+
+        // Periodically flushes newly-drawn control points from the local main pointer to remote
+        // clients while a stroke is still in progress, so it renders fluidly instead of only
+        // appearing once fully complete. Purely additive/best-effort - the authoritative stroke
+        // data still only ever comes from CommandBrushStroke()'s existing, unchanged send at
+        // actual completion. See PhotonRPC.cs's live preview RPCs for the receiving side.
+        private void UpdateLiveStrokeStream()
+        {
+            var pointer = PointerManager.m_Instance.MainPointer;
+            bool isDrawing = pointer.IsCreatingStroke() &&
+                PointerManager.m_Instance.CurrentSymmetryMode == PointerManager.SymmetryMode.None;
+
+            if (!isDrawing)
+            {
+                if (m_LiveStrokeSeed != null)
+                {
+                    int endedSeed = m_LiveStrokeSeed.Value;
+                    PhotonRPCBatcher.EnqueueRPC(() =>
+                    {
+                        PhotonRPC.Send_LiveStrokeEnd(m_Runner, endedSeed);
+                    });
+                }
+                m_LiveStrokeSeed = null;
+                m_LiveStrokePointsSent = 0;
+                return;
+            }
+
+            if (m_LiveStrokeSeed == null)
+            {
+                if (pointer.NumControlPoints == 0) return; // wait for a first point to seed with
+
+                int seed = pointer.CurrentBrushScript.RandomSeed;
+                var first = pointer.GetControlPointsFrom(0)[0];
+                Guid brushGuid = pointer.CurrentBrush != null ? (Guid)pointer.CurrentBrush.m_Guid : Guid.Empty;
+
+                PhotonRPCBatcher.EnqueueRPC(() =>
+                {
+                    PhotonRPC.Send_LiveStrokeBegin(
+                        m_Runner, seed, brushGuid, pointer.GetCurrentColor(),
+                        pointer.BrushSizeAbsolute, pointer.CurrentBrushScript.StrokeScale,
+                        first.m_Pos, first.m_Orient, first.m_Pressure);
+                });
+
+                m_LiveStrokeSeed = seed;
+                m_LiveStrokePointsSent = 1;
+                m_LiveStrokeLastFlushRealtime = Time.realtimeSinceStartup;
+                return;
+            }
+
+            float intervalMs = m_Manager != null ? m_Manager.LiveStrokeFlushIntervalMs : 100f;
+            if ((Time.realtimeSinceStartup - m_LiveStrokeLastFlushRealtime) * 1000f < intervalMs) return;
+
+            var newPoints = pointer.GetControlPointsFrom(m_LiveStrokePointsSent);
+            if (newPoints.Length > 0)
+            {
+                int seed = m_LiveStrokeSeed.Value;
+                var netPoints = new NetworkedControlPoint[newPoints.Length];
+                for (int i = 0; i < newPoints.Length; i++)
+                {
+                    netPoints[i] = new NetworkedControlPoint().Init(newPoints[i]);
+                }
+
+                PhotonRPCBatcher.EnqueueRPC(() =>
+                {
+                    PhotonRPC.Send_LiveStrokeContinue(m_Runner, seed, netPoints);
+                });
+
+                m_LiveStrokePointsSent += newPoints.Length;
+            }
+            m_LiveStrokeLastFlushRealtime = Time.realtimeSinceStartup;
         }
 
         #region IConnectionHandler Methods

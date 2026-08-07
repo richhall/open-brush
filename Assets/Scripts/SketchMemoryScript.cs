@@ -19,6 +19,7 @@ using System.Linq;
 using TiltBrush;
 using System.Collections;
 using System.Threading.Tasks;
+using OpenBrush.Multiplayer.Recording;
 
 namespace TiltBrush
 {
@@ -575,15 +576,21 @@ namespace TiltBrush
             rNewStroke.m_Seed = seed;
             subset.m_Stroke = rNewStroke;
 
-            PerformAndRecordCommand(
-                new BrushStrokeCommand(
-                    rNewStroke,
-                    stencil,
-                    lineLength,
-                    ApiManager.Instance.ActiveUndo
-                ),
-                invoke: isFinalStroke
+            var command = new BrushStrokeCommand(
+                rNewStroke,
+                stencil,
+                lineLength,
+                ApiManager.Instance.ActiveUndo
             );
+
+            // Flight recorder capture - local strokes never pass through PhotonRPC's receive
+            // path (that only fires for strokes arriving from other players), so they need
+            // their own hook here. No-op unless SessionRecorder.IsRecording.
+            SessionRecorder.m_Instance.RecordStrokeComplete(
+                command.NetworkTimestamp, command.Guid, rNewStroke.m_Seed, rNewStroke.m_BrushGuid,
+                rNewStroke.m_Color, rNewStroke.m_BrushSize, rNewStroke.m_BrushScale, rNewStroke.m_ControlPoints);
+
+            PerformAndRecordCommand(command, invoke: isFinalStroke);
 
             if (m_SanityCheckStrokes)
             {
@@ -614,10 +621,23 @@ namespace TiltBrush
             rNewStroke.m_BrushSize = fBrushSize;
             rNewStroke.m_BrushScale = brushScale;
             rNewStroke.m_Flags = strokeFlags;
+            // Previously left at the int default (0) for every non-batched stroke - unlike
+            // MemorizeBatchedBrushStroke, which already takes a real seed. Fixed so every local
+            // stroke has a genuinely unique seed: needed for multiplayer live stroke streaming to
+            // correlate a finished stroke back to its in-progress preview (see PhotonRPC.cs), and
+            // incidentally makes DeleteStroke's existing seed-based lookup reliable too.
+            rNewStroke.m_Seed = brushScript.RandomSeed;
             brushScript.Stroke = rNewStroke;
 
-            SketchMemoryScript.m_Instance.RecordCommand(
-                new BrushStrokeCommand(rNewStroke, stencil, lineLength, ApiManager.Instance.ActiveUndo));
+            var command = new BrushStrokeCommand(rNewStroke, stencil, lineLength, ApiManager.Instance.ActiveUndo);
+
+            // Flight recorder capture - see MemorizeBatchedBrushStroke for why this needs its
+            // own hook rather than relying on PhotonRPC's receive-side capture.
+            SessionRecorder.m_Instance.RecordStrokeComplete(
+                command.NetworkTimestamp, command.Guid, rNewStroke.m_Seed, rNewStroke.m_BrushGuid,
+                rNewStroke.m_Color, rNewStroke.m_BrushSize, rNewStroke.m_BrushScale, rNewStroke.m_ControlPoints);
+
+            SketchMemoryScript.m_Instance.RecordCommand(command);
 
             MemoryListAdd(rNewStroke);
 

@@ -320,6 +320,18 @@ namespace TiltBrush
             return (m_CurrentLine != null);
         }
 
+        // Current in-progress line's control point count - used by multiplayer live stroke
+        // streaming to know how many points have accumulated locally since the last network flush.
+        public int NumControlPoints => m_ControlPoints.Count;
+
+        // Returns a copy of the in-progress line's control points from startIndex onward - used
+        // by multiplayer live stroke streaming to grab only the points not yet sent.
+        public PointerManager.ControlPoint[] GetControlPointsFrom(int startIndex)
+        {
+            if (startIndex >= m_ControlPoints.Count) return Array.Empty<PointerManager.ControlPoint>();
+            return m_ControlPoints.GetRange(startIndex, m_ControlPoints.Count - startIndex).ToArray();
+        }
+
         public Color GetCurrentColor()
         {
             return m_CurrentColor;

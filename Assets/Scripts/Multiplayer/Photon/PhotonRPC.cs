@@ -24,6 +24,7 @@ using TiltBrush;
 using static TiltBrush.SketchControlsScript;
 using System.Threading.Tasks;
 using Photon.Voice.Unity;
+using OpenBrush.Multiplayer.Recording;
 
 namespace OpenBrush.Multiplayer
 {
@@ -33,19 +34,39 @@ namespace OpenBrush.Multiplayer
         private static List<PendingCommand> m_pendingCommands;
         private static Dictionary<Guid, TaskCompletionSource<bool>> m_acknowledgments;
 
+        // Live stroke streaming (fluid remote rendering) - keyed by the drawing stroke's own
+        // seed, not a stroke/command guid, since neither exists yet while a stroke is still being
+        // drawn. See RPC_LiveStrokeBegin/Continue/End below and MultiplayerManager's sender side.
+        private static Dictionary<int, LivePreview> m_LivePreviewPointers;
+
         public void Awake()
         {
             m_inProgressStrokes = new();
             m_pendingCommands = new();
             m_acknowledgments = new();
+            m_LivePreviewPointers = new();
         }
 
         public void Update()
         {
             TryProcessCommands();
+            SweepStaleLivePreviews();
         }
 
-        private bool CheckifChildStillPending(PendingCommand pending)
+        // Entry point for callers with no live PhotonRPC instance to hang off (e.g. flight
+        // recorder replay, which can run after leaving multiplayer - see FlightRecorderBootstrap).
+        // TryProcessCommands()/CheckifChildStillPending()/InvokePreCommands() only ever touch the
+        // static m_pendingCommands list, never instance state, so they're safe to drive this way.
+        // Calling this from both here and PhotonRPC.Update() while actually connected is harmless -
+        // the second call just finds an already-empty queue.
+        public static void ProcessPendingCommands()
+        {
+            m_pendingCommands ??= new();
+            m_inProgressStrokes ??= new();
+            TryProcessCommands();
+        }
+
+        private static bool CheckifChildStillPending(PendingCommand pending)
         {
             if (pending.TotalExpectedChildren == pending.Command.ChildrenCount)
             {
@@ -78,7 +99,7 @@ namespace OpenBrush.Multiplayer
             }
         }
 
-        private void InvokePreCommands(PendingCommand pendingCommand)
+        private static void InvokePreCommands(PendingCommand pendingCommand)
         {
             pendingCommand.PreCommandAction.Invoke();
 
@@ -88,7 +109,7 @@ namespace OpenBrush.Multiplayer
             }
         }
 
-        private void TryProcessCommands()
+        private static void TryProcessCommands()
         {
             if (m_pendingCommands.Count == 0)
             {
@@ -298,11 +319,25 @@ namespace OpenBrush.Multiplayer
             m_inProgressStrokes.Remove(id);
         }
 
-        private static void CreateBrushStroke(Stroke stroke, Guid commandGuid, int timestamp, Guid parentGuid = default, int childCount = 0)
+        // Public (not just for internal RPC use) so SessionPlaybackController can drive replay
+        // through the exact same path a live remote stroke takes, rather than duplicating this
+        // logic - see flight recorder design notes.
+        public static void CreateBrushStroke(Stroke stroke, Guid commandGuid, int timestamp, Guid parentGuid = default, int childCount = 0)
         {
+
+            // Flight recorder capture - covers both the single-RPC Full path and the
+            // Begin/Continue/Complete streaming path, since both funnel through here with a
+            // fully-populated stroke. No-op unless SessionRecorder.IsRecording.
+            SessionRecorder.m_Instance.RecordStrokeComplete(
+                timestamp, commandGuid, stroke.m_Seed, stroke.m_BrushGuid,
+                stroke.m_Color, stroke.m_BrushSize, stroke.m_BrushScale, stroke.m_ControlPoints);
 
             Action preAction = () =>
             {
+                // Tear down any live-drawn preview for this stroke right before the authoritative
+                // geometry is built, so there's no overlap between the two.
+                CleanUpLivePreview(stroke.m_Seed);
+
                 stroke.m_Type = Stroke.Type.NotCreated;
                 stroke.m_IntendedCanvas = App.Scene.MainCanvas;
                 stroke.Recreate(null, App.Scene.MainCanvas);
@@ -328,7 +363,9 @@ namespace OpenBrush.Multiplayer
             }
         }
 
-        private static void DeleteStroke(int seed, Guid commandGuid, int timestamp, Guid parentGuid = default, int childCount = 0)
+        // Public so SessionPlaybackController can replay deletions through the same path a
+        // live remote delete takes.
+        public static void DeleteStroke(int seed, Guid commandGuid, int timestamp, Guid parentGuid = default, int childCount = 0)
         {
             if (CheckifCommandGuidIsInStack(commandGuid)) return;
 
@@ -338,6 +375,8 @@ namespace OpenBrush.Multiplayer
 
             if (foundStroke != null)
             {
+                SessionRecorder.m_Instance.RecordStrokeDelete(timestamp, commandGuid, seed);
+
                 var parentCommand = FindParentCommand(parentGuid);
                 var command = new DeleteStrokeCommand(foundStroke, commandGuid, timestamp, parent: parentCommand);
 
@@ -348,6 +387,181 @@ namespace OpenBrush.Multiplayer
                 Debug.LogError($"couldn't find stroke with seed: {seed}");
             }
         }
+
+        #region Live stroke streaming (fluid remote rendering)
+        // Purely-visual, best-effort preview channel, entirely separate from the authoritative
+        // Begin/Continue/Complete/Full pipeline above, which is left completely unchanged - the
+        // real stroke data and undo/redo registration still only ever come from there. This just
+        // grows a temporary line on a dedicated remote pointer while the sender is actively
+        // drawing, then gets torn down the moment the authoritative stroke arrives (matched by
+        // seed - see SketchMemoryScript.MemorizeBrushStroke for why every local stroke now gets
+        // a real one). If the authoritative stroke never arrives for some reason, a per-frame
+        // sweep in Update() force-cleans anything stale so nothing is orphaned permanently.
+
+        private class LivePreview
+        {
+            public PointerScript Pointer;
+            public Stroke PlaceholderStroke;
+            public float LastUpdateRealtime;
+        }
+
+        // Seconds with no Continue/authoritative-arrival before a preview is force-cleaned -
+        // covers the case where End or the final stroke data never shows up (dropped RPC, error).
+        private const float kLivePreviewStaleSeconds = 8f;
+
+        public static void Send_LiveStrokeBegin(NetworkRunner runner, int seed, Guid brushGuid, Color color,
+            float brushSize, float brushScale, Vector3 pos, Quaternion orient, float pressure)
+        {
+            RPC_LiveStrokeBegin(runner, seed, brushGuid, color, brushSize, brushScale, pos, orient, pressure);
+        }
+
+        public static void Send_LiveStrokeContinue(NetworkRunner runner, int seed, NetworkedControlPoint[] newPoints)
+        {
+            RPC_LiveStrokeContinue(runner, seed, newPoints);
+        }
+
+        public static void Send_LiveStrokeEnd(NetworkRunner runner, int seed)
+        {
+            RPC_LiveStrokeEnd(runner, seed);
+        }
+
+        private static void LiveStrokeBegin(int seed, Guid brushGuid, Color color, float brushSize, float brushScale,
+            Vector3 pos, Quaternion orient, float pressure)
+        {
+            if (m_LivePreviewPointers.ContainsKey(seed))
+            {
+                // Already tracking this one - a duplicate/late Begin arrived, ignore it.
+                return;
+            }
+
+            var placeholder = new Stroke
+            {
+                m_Type = Stroke.Type.NotCreated,
+                m_IntendedCanvas = App.Scene.MainCanvas,
+                m_BrushGuid = brushGuid,
+                m_Color = color,
+                m_BrushSize = brushSize,
+                m_BrushScale = brushScale,
+                m_Seed = seed,
+                m_ControlPoints = new[]
+                {
+                    new PointerManager.ControlPoint { m_Pos = pos, m_Orient = orient, m_Pressure = pressure }
+                },
+                m_ControlPointsToDrop = new[] { false },
+            };
+
+            var pointer = PointerManager.m_Instance.CreateRemotePointer();
+            if (pointer.BeginLineFromMemory(placeholder, App.Scene.MainCanvas) == null)
+            {
+                // Unknown brush guid etc - BeginLineFromMemory already logs. Nothing to preview.
+                PointerManager.m_Instance.RemoveRemotePointer(pointer);
+                return;
+            }
+
+            // BeginLineFromMemory only positions the pointer at point 0's transform - it does not
+            // lay down any geometry for it. Every other caller of BeginLineFromMemory in this
+            // codebase (Stroke.Recreate -> RecreateLineFromMemory -> UpdateLineFromStroke, and the
+            // native timestamp-playback system) always follows it with an UpdateLineFromControlPoint
+            // call starting from point 0, not point 1. Skipping this left the brush's internal
+            // "last position" seeded but with no committed first vertex, which showed up as a
+            // spurious triangle connecting back to the start point until the authoritative stroke
+            // replaced the preview at completion.
+            pointer.UpdateLineFromControlPoint(placeholder.m_ControlPoints[0]);
+            pointer.UpdateLineVisuals();
+
+            m_LivePreviewPointers[seed] = new LivePreview
+            {
+                Pointer = pointer,
+                PlaceholderStroke = placeholder,
+                LastUpdateRealtime = Time.realtimeSinceStartup,
+            };
+        }
+
+        private static void LiveStrokeContinue(int seed, NetworkedControlPoint[] newPoints)
+        {
+            if (!m_LivePreviewPointers.TryGetValue(seed, out var preview)) return;
+            if (newPoints == null || newPoints.Length == 0) return;
+
+            foreach (var netCp in newPoints)
+            {
+                preview.Pointer.UpdateLineFromControlPoint(NetworkedControlPoint.ToControlPoint(netCp));
+            }
+            preview.Pointer.UpdateLineVisuals();
+            preview.LastUpdateRealtime = Time.realtimeSinceStartup;
+
+            // The pointer's own transform is set once in BeginLineFromMemory and never moved again,
+            // but PointerManager.Update() calls UpdatePointer() -> UpdateLineFromObject() on every
+            // remote pointer every frame regardless of our explicit Continue calls above. That
+            // derives its target position from this stale transform, which used to yank
+            // m_LastSpawnXf back to the stroke's start position between Continue batches (the cause
+            // of the preview fanning back to the start point while drawing). Keep the pointer's
+            // transform in sync with the latest point so that per-frame call is a no-op - matches
+            // what local drawing does every frame anyway.
+            var lastCp = newPoints[newPoints.Length - 1];
+            var xf_CS = TrTransform.TRS(lastCp.m_Pos, lastCp.m_Orient, preview.PlaceholderStroke.m_BrushScale);
+            var xf_RS = App.Scene.MainCanvas.Pose * xf_CS;
+            preview.Pointer.transform.SetPositionAndRotation(xf_RS.translation, xf_RS.rotation);
+        }
+
+        private static void LiveStrokeEnd(int seed)
+        {
+            if (!m_LivePreviewPointers.TryGetValue(seed, out var preview)) return;
+            // Nothing to draw right now - just bookkeeping so the stale sweep doesn't fire
+            // immediately if the authoritative stroke takes a little longer to arrive than usual
+            // (e.g. a large stroke needing several chunked Continue RPCs).
+            preview.LastUpdateRealtime = Time.realtimeSinceStartup;
+        }
+
+        // Called from CreateBrushStroke() the moment the authoritative version of a stroke is
+        // about to be (re)created, so the temporary preview never overlaps with the real thing.
+        private static void CleanUpLivePreview(int seed)
+        {
+            if (!m_LivePreviewPointers.TryGetValue(seed, out var preview)) return;
+            preview.Pointer.EndLineFromMemory(preview.PlaceholderStroke, discard: true);
+            PointerManager.m_Instance.RemoveRemotePointer(preview.Pointer);
+            m_LivePreviewPointers.Remove(seed);
+        }
+
+        private static void SweepStaleLivePreviews()
+        {
+            if (m_LivePreviewPointers.Count == 0) return;
+            float now = Time.realtimeSinceStartup;
+            List<int> stale = null;
+            foreach (var kvp in m_LivePreviewPointers)
+            {
+                if (now - kvp.Value.LastUpdateRealtime > kLivePreviewStaleSeconds)
+                {
+                    (stale ??= new List<int>()).Add(kvp.Key);
+                }
+            }
+            if (stale == null) return;
+            foreach (var seed in stale)
+            {
+                Debug.LogWarning($"[Multiplayer] Live stroke preview for seed {seed} never got an authoritative stroke - force-cleaned.");
+                CleanUpLivePreview(seed);
+            }
+        }
+
+        [Rpc(InvokeLocal = false)]
+        private static void RPC_LiveStrokeBegin(NetworkRunner runner, int seed, Guid brushGuid, Color color,
+            float brushSize, float brushScale, Vector3 pos, Quaternion orient, float pressure)
+        {
+            LiveStrokeBegin(seed, brushGuid, color, brushSize, brushScale, pos, orient, pressure);
+        }
+
+        [Rpc(InvokeLocal = false)]
+        private static void RPC_LiveStrokeContinue(NetworkRunner runner, int seed, NetworkedControlPoint[] newPoints)
+        {
+            LiveStrokeContinue(seed, newPoints);
+        }
+
+        [Rpc(InvokeLocal = false)]
+        private static void RPC_LiveStrokeEnd(NetworkRunner runner, int seed)
+        {
+            LiveStrokeEnd(seed);
+        }
+
+        #endregion
 
         public static void Send_SwitchEnvironment(NetworkRunner runner, Guid environmentGuid, Guid commandGuid, int timestamp, Guid parentGuid = default, int childCount = 0, [RpcTarget] PlayerRef targetPlayer = default)
         {

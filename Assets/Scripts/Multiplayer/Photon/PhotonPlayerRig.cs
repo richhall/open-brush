@@ -20,6 +20,7 @@ using TiltBrush;
 using System;
 using System.Collections;
 using TMPro;
+using OpenBrush.Multiplayer.Recording;
 
 namespace OpenBrush.Multiplayer
 {
@@ -245,6 +246,15 @@ namespace OpenBrush.Multiplayer
                     Scale
                 );
                 App.Scene.AsScene[rightHandTransform] = remoteRightTR;
+
+                // Flight recorder capture - no-ops unless SessionRecorder.IsRecording, so this
+                // is a cheap bool check on every other frame. Uses the shared Fusion tick clock,
+                // not local time, so pose samples from every recorded player land on one
+                // common timeline - see flight recorder design notes.
+                SessionRecorder.m_Instance.RecordPose(
+                    oculusPlayerId,
+                    MultiplayerManager.m_Instance?.GetNetworkedTimestampMilliseconds(),
+                    remoteTR, remoteLeftTR, remoteRightTR, toolTR);
 
                 // Local, per-device preference (MultiplayerManager.HideRemotePlayerAvatars) -
                 // checked every frame rather than only at Spawned() so it reacts live if

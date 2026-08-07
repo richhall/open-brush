@@ -1,4 +1,5 @@
 ﻿using OpenBrush.Multiplayer;
+using OpenBrush.Multiplayer.Recording;
 using UnityEngine;
 namespace TiltBrush
 {
@@ -73,6 +74,50 @@ namespace TiltBrush
         {
             ColocationBootstrap.Leave();
         }
+
+        [ApiEndpoint("recording.start", "Starts flight-recording the current multiplayer session (strokes + player pose) for later replay")]
+        public static void RecordingStart()
+        {
+            if (!SessionRecorder.m_Instance.StartRecording())
+            {
+                Debug.LogWarning("Failed to start session recording - see previous error.");
+            }
+        }
+
+        [ApiEndpoint("recording.stop", "Stops the current flight recording")]
+        public static void RecordingStop()
+        {
+            SessionRecorder.m_Instance.StopRecording();
+        }
+
+#if MP_PHOTON
+        [ApiEndpoint("replay.list", "Lists available flight recordings, newest first, comma-separated")]
+        public static string ReplayList()
+        {
+            return string.Join(",", SessionPlaybackController.m_Instance.ListRecordings());
+        }
+
+        [ApiEndpoint("replay.start", "Replays a flight recording into the current sketch. Omit filename to replay the most recent recording")]
+        public static void ReplayStart(string filename = "")
+        {
+            if (!SessionPlaybackController.m_Instance.StartReplay(filename))
+            {
+                Debug.LogWarning("Failed to start replay - see previous error.");
+            }
+        }
+
+        [ApiEndpoint("replay.stop", "Stops the current replay")]
+        public static void ReplayStop()
+        {
+            SessionPlaybackController.m_Instance.Stop();
+        }
+
+        [ApiEndpoint("multiplayer.liveStrokeStreamIntervalMs", "Sets how often (in milliseconds) a locally-drawn stroke's new points are flushed to other players while still being drawn, for fluid remote rendering. Lower is smoother but sends more RPC traffic - default 100")]
+        public static void SetLiveStrokeStreamIntervalMs(float ms)
+        {
+            MultiplayerManager.m_Instance.LiveStrokeFlushIntervalMs = Mathf.Max(0f, ms);
+        }
+#endif // MP_PHOTON
 
     }
 }

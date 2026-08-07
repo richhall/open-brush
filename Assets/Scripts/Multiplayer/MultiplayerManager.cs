@@ -25,6 +25,7 @@ using OVRPlatform = Oculus.Platform;
 #endif
 using TiltBrush;
 using UnityEngine.Serialization;
+using OpenBrush.Multiplayer.Recording;
 
 namespace OpenBrush.Multiplayer
 {
@@ -41,6 +42,16 @@ namespace OpenBrush.Multiplayer
         public static MultiplayerManager m_Instance;
         public MultiplayerType m_MultiplayerType;
         public event Action Disconnected;
+
+        // Minimum time between live-stroke-streaming network flushes, in milliseconds, while a
+        // remote stroke is being fluidly rendered as it's drawn (see PhotonRPC.cs's live preview
+        // RPCs and PhotonManager.UpdateLiveStrokeStream). Tunable at runtime via the API
+        // (multiplayer.liveStrokeStreamIntervalMs) so it can be dialed in by testing - lower is
+        // smoother but sends more RPC traffic. Each RPC is a discrete message (unlike head/
+        // controller position, which rides Fusion's own optimized property replication), so
+        // matching that cadence exactly isn't free - 100ms (~10Hz) is a reasonable starting point,
+        // not a hard technical floor.
+        public float LiveStrokeFlushIntervalMs = 100f;
 
         private IDataConnectionHandler m_Manager;
         private IVoiceConnectionHandler m_VoiceManager;
@@ -534,6 +545,16 @@ namespace OpenBrush.Multiplayer
             {
                 m_LocalPlayer.TransmitData(data);
             }
+
+            // Flight recorder capture of the LOCAL player's own pose - no-ops unless
+            // SessionRecorder.IsRecording. PhotonPlayerRig.RecordPose() only ever fires for
+            // remote players (it's gated behind !HasStateAuthority), so this device's own
+            // movement was never being captured - this is the local-player counterpart, reusing
+            // the exact same per-frame pose data already computed above for the network send.
+            SessionRecorder.m_Instance.RecordPose(
+                myOculusUserId,
+                GetNetworkedTimestampMilliseconds(),
+                headRelativeToScene, leftHandRelativeToScene, rightHandRelativeToScene, pointerRelativeToScene);
 
 
             // Update remote user refs, and send Anchors if new player joins.
