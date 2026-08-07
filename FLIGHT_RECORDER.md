@@ -2,7 +2,7 @@
 
 **Branch:** `flight-recorder`, stacked on [`meta-colocation`](COLOCATION.md) (builds on its anchor/`PhotonPlayerRig` infrastructure — read that file first for the multiplayer/colocation base this sits on).
 
-**Status: functionally working end-to-end on real hardware (confirmed 2026-08-07), but not yet committed.** Everything below exists only as uncommitted working-tree changes on top of `meta-colocation`'s tip (`b1c80ca83`) — `git status` on this branch will show it dirty. This file exists so the state of that work is legible before it gets committed.
+**Status: functionally working end-to-end on real hardware (confirmed 2026-08-07).** Committed as `6ef7c9391`, pushed to `richhall/open-brush`.
 
 ## What this branch adds
 
@@ -34,4 +34,4 @@ A purely additive, best-effort real-time preview of a remote player's stroke *wh
 - Hide-remote-avatars toggle not confirmed working during replay specifically (works live, per `meta-colocation`).
 - No pause/seek, and no "lock camera to a recorded player's POV" — both flagged as follow-ups in the original design discussion, not built.
 - No UI for recording/replay — API-only right now (`recording.start`/`stop`, `replay.list`/`start`).
-- **Not committed.** Also present in the same dirty working tree, unrelated to this feature and should be excluded from any commit: `RuntimeActionBindings.json` (MX Ink stylus binding wipe), `Assets/Resources/Environments/CustomSkybox.mat` (`_Tint` change), `Assets/XR/Settings/Open XR Package Settings.asset` (GUID reorder noise), `Assets/Scripts/Input/UnityXRInputAction.cs` (unexplained guard removal) — see `meta-colocation`'s own notes, these have been carried as uncommitted noise since before this branch existed.
+- Deliberately left out of the commit (still sitting as unstaged/uncommitted noise in the working tree, unrelated to this feature): `RuntimeActionBindings.json` (MX Ink stylus binding wipe), `Assets/Resources/Environments/CustomSkybox.mat` (`_Tint` change), `Assets/XR/Settings/Open XR Package Settings.asset` (GUID reorder noise), `Assets/Scripts/Input/UnityXRInputAction.cs` (unexplained guard removal) — see `meta-colocation`'s own notes, these have been carried as uncommitted noise since before this branch existed.
