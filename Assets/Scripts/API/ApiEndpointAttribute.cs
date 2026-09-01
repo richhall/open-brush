@@ -117,6 +117,18 @@ namespace TiltBrush
                         float.Parse(tokens[tokenIndex++])
                     );
                 }
+                else if (paramType.ParameterType == typeof(Quaternion))
+                {
+                    // x,y,z,w - raw quaternion components, so callers can supply a directly
+                    // computed rotation instead of going through Euler angles (which have
+                    // their own composition-order/gimbal ambiguities at the API boundary).
+                    paramValue = new Quaternion(
+                        float.Parse(tokens[tokenIndex++]),
+                        float.Parse(tokens[tokenIndex++]),
+                        float.Parse(tokens[tokenIndex++]),
+                        float.Parse(tokens[tokenIndex++])
+                    );
+                }
                 else if (paramType.ParameterType == typeof(bool))
                 {
                     paramValue = tokens[tokenIndex++];

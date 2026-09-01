@@ -125,6 +125,14 @@ namespace TiltBrush
 
         /// discern between initial and edit-time playback in timeline edit mode
         private bool m_IsInitialPlay;
+
+        /// When set, the playback timeline is kept alive after the initial play finishes,
+        /// instead of being torn down. This is what makes seeking work: App.CurrentSketchTime
+        /// is only acted upon by IScenePlayback.Update(), so with no playback object a seek
+        /// silently does nothing. Keeping it alive lets Update() apply seeks incrementally -
+        /// stepping forward renders only the strokes that started since the last frame.
+        /// Off by default, so ordinary playback is unchanged.
+        [NonSerialized] public bool m_KeepPlaybackAliveForScrubbing;
         private PlaybackMode m_PlaybackMode;
         public PlaybackMode CurrentPlaybackMode => m_PlaybackMode;
         private float m_DistancePerSecond; // in units. for PlaybackMode.Distance
@@ -1479,7 +1487,10 @@ namespace TiltBrush
                     // we're done-- however in timeline edit mode we keep playback alive to allow scrubbing
                     PointerManager.m_Instance.SetInPlaybackMode(false);
                     PointerManager.m_Instance.RequestPointerRendering(true);
-                    m_ScenePlayback = null;
+                    if (!m_KeepPlaybackAliveForScrubbing)
+                    {
+                        m_ScenePlayback = null;
+                    }
                 }
                 return false;
             }

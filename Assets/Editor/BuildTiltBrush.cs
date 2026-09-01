@@ -1052,6 +1052,7 @@ static class BuildTiltBrush
         private string m_company;
         private bool m_IsAndroidOrIos;
         private BuildTarget m_Target;
+        private int m_prevVersionCode;
         public TempSetAppNames(BuildTarget target, string Description)
         {
             m_Target = target;
@@ -1059,6 +1060,7 @@ static class BuildTiltBrush
             m_identifier = PlayerSettings.GetApplicationIdentifier(TargetToGroup(target));
             m_name = PlayerSettings.productName;
             m_company = PlayerSettings.companyName;
+            m_prevVersionCode = PlayerSettings.Android.bundleVersionCode;
             string new_name = App.kAppDisplayName;
 
             string new_identifier = m_identifier;
@@ -1074,9 +1076,32 @@ static class BuildTiltBrush
                     break;
             }
 
+            // Set to true by the CollusionBrush workaround below - the identifier must exactly
+            // match what's registered on the Meta dashboard, so it must not get the
+            // Description-suffix treatment every other identifier gets further down.
+            bool identifierMustMatchExactly = false;
 #if OCULUS_SUPPORTED || USE_QUEST_PACKAGE_NAME
-            //Can't change Quest identifier
-            new_identifier = "com.Icosa.OpenBrush";
+            // TEMP DEV WORKAROUND (matches the same workaround on the fork's meta-colocation/
+            // flight-recorder branches): the official OpenBrush App ID has no entitlement on
+            // this dev's Meta account, so GetLoggedInUser()/entitlement checks fail. Overriding
+            // to the package name registered against the CollusionBrush App ID
+            // (uk.org.collusion.MRMotifs) so multiplayer can actually be tested end-to-end.
+            // Revert to "com.Icosa.OpenBrush" for any real Open Brush build.
+            new_identifier = "uk.org.collusion.MRMotifs";
+            identifierMustMatchExactly = true;
+            // This package name is shared with the fork's own meta-colocation/flight-recorder
+            // builds, so installs collide on the same headset app slot - Android refuses to
+            // install a lower versionCode over a higher one already present. Auto-increment per
+            // build (starting from 126, the fork's own last-known installed versionCode as of
+            // this workaround being added) so this branch's builds always install cleanly
+            // regardless of which one was sideloaded last. EditorPrefs rather than a repo file
+            // since this is per-machine, temporary-workaround state, not project state - and
+            // it's already implicitly keyed per-project-path by Unity, so this can't collide
+            // with the fork's own separate counter despite the similar name.
+            const string versionCodeKey = "OpenBrush_MPStrokeStreaming_MRMotifs_VersionCode";
+            int nextVersionCode = EditorPrefs.GetInt(versionCodeKey, 126) + 1;
+            EditorPrefs.SetInt(versionCodeKey, nextVersionCode);
+            PlayerSettings.Android.bundleVersionCode = nextVersionCode;
 #elif ZAPBOX_SUPPORTED
             // Zapbox has a separate listing
             new_identifier = "foundation.icosa.openbrushzapbox";
@@ -1086,7 +1111,10 @@ static class BuildTiltBrush
             if (!String.IsNullOrEmpty(Description))
             {
                 new_name += "-(" + Description.Replace("#", "") + ")";
-                new_identifier += "-" + Description.Replace("_", "").Replace("#", "").Replace("-", "");
+                if (!identifierMustMatchExactly)
+                {
+                    new_identifier += "-" + Description.Replace("_", "").Replace("#", "").Replace("-", "");
+                }
             }
             if (m_IsAndroidOrIos)
             {
@@ -1104,6 +1132,7 @@ static class BuildTiltBrush
             }
             PlayerSettings.productName = m_name;
             PlayerSettings.companyName = m_company;
+            PlayerSettings.Android.bundleVersionCode = m_prevVersionCode;
         }
     }
 

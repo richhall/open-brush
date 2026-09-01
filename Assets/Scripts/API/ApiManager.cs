@@ -724,6 +724,15 @@ Success. If you are not automatically redirected, please visit <a href='{success
                 case "query.multiplayer":
                     return ApiMainThreadObserver.Instance?.RequestMultiplayerStatus() ??
                         "{\"state\":\"UNAVAILABLE\",\"inRoom\":false,\"players\":[]}";
+                case "query.camera.projection":
+                    // Both halves of the camera: what it projects with, and where it actually
+                    // was for the last capture. Extrinsics are reported even when no calibrated
+                    // intrinsics are set, since "is the camera pointing where I asked" is a
+                    // question worth answering in either case.
+                    // Plain strings built on the main thread (see ScreenshotManager), so this
+                    // doesn't touch Unity objects from the HTTP listener thread.
+                    return "{\"projection\":" + ScreenshotManager.s_ProjectionReportJson +
+                        ",\"lastCaptureExtrinsics\":" + ScreenshotManager.s_LastCaptureExtrinsicsJson + "}";
             }
             return "unknown query";
         }

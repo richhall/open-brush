@@ -24,6 +24,7 @@ using Fusion.Photon.Realtime;
 using Fusion.Sockets;
 using TiltBrush;
 using UnityEngine.SceneManagement;
+using ExitGames.Client.Photon;
 
 
 namespace OpenBrush.Multiplayer
@@ -53,6 +54,10 @@ namespace OpenBrush.Multiplayer
             {
                 AppIdFusion = App.Config.PhotonFusionSecrets.ClientId,
                 FixedRegion = "",
+                // TEMP DEV WORKAROUND: force WSS (port 443) instead of raw UDP so we can
+                // connect on networks that block outbound UDP to Photon's nameserver/game
+                // servers. Revert to default (Udp) once off this network.
+                Protocol = ConnectionProtocol.WebSocketSecure,
             };
         }
 

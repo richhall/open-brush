@@ -109,8 +109,13 @@ namespace TiltBrush
             TrTransform pose = App.Scene.Pose;
             pose.translation = -position;
             float BoundsRadius = SceneSettings.m_Instance.HardBoundsRadiusMeters_SS;
+            TrTransform preClamp = pose;
             pose = SketchControlsScript.MakeValidScenePose(pose, BoundsRadius);
             App.Scene.Pose = pose;
+            ScreenshotManager.DebugLogToFile(
+                $"MoveUserTo: input_position={position} BoundsRadius={BoundsRadius} " +
+                $"preClamp.translation={preClamp.translation} postClamp.translation={pose.translation} " +
+                $"clamped={(preClamp.translation != pose.translation)}");
         }
 
         [ApiEndpoint(
@@ -261,8 +266,39 @@ namespace TiltBrush
         {
             TrTransform lookPose = App.Scene.Pose;
             Quaternion qNewRotation = Quaternion.Euler(direction.x, direction.y, direction.z);
+            ScreenshotManager.DebugLogToFile(
+                $"UserLookAt: input_direction(euler)={direction} " +
+                $"preAssign.translation={lookPose.translation} " +
+                $"resulting_quaternion=(x={qNewRotation.x:F6},y={qNewRotation.y:F6},z={qNewRotation.z:F6},w={qNewRotation.w:F6}) " +
+                $"resulting_quaternion.eulerAngles={qNewRotation.eulerAngles}");
             lookPose.rotation = qNewRotation;
             App.Scene.Pose = lookPose;
+            TrTransform readBack = App.Scene.Pose;
+            ScreenshotManager.DebugLogToFile(
+                $"UserLookAt: AFTER App.Scene.Pose assignment - readBack.translation={readBack.translation} " +
+                $"readBack.rotation.eulerAngles={readBack.rotation.eulerAngles} " +
+                $"readBack.rotation=(x={readBack.rotation.x:F6},y={readBack.rotation.y:F6},z={readBack.rotation.z:F6},w={readBack.rotation.w:F6}) " +
+                $"unexpected_translation_change={(readBack.translation != lookPose.translation)}");
+        }
+
+        [ApiEndpoint(
+            "user.look.at.quat",
+            "Sets the user camera's rotation directly from a quaternion (x,y,z,w), bypassing Euler-angle conversion at the API boundary",
+            "0,0,0,1"
+        )]
+        public static void UserLookAtQuat(Quaternion rotation)
+        {
+            TrTransform lookPose = App.Scene.Pose;
+            ScreenshotManager.DebugLogToFile(
+                $"UserLookAtQuat: input_quaternion=(x={rotation.x:F6},y={rotation.y:F6},z={rotation.z:F6},w={rotation.w:F6}) " +
+                $"input_quaternion.eulerAngles={rotation.eulerAngles} preAssign.translation={lookPose.translation}");
+            lookPose.rotation = rotation;
+            App.Scene.Pose = lookPose;
+            TrTransform readBack = App.Scene.Pose;
+            ScreenshotManager.DebugLogToFile(
+                $"UserLookAtQuat: AFTER App.Scene.Pose assignment - readBack.translation={readBack.translation} " +
+                $"readBack.rotation.eulerAngles={readBack.rotation.eulerAngles} " +
+                $"readBack.rotation=(x={readBack.rotation.x:F6},y={readBack.rotation.y:F6},z={readBack.rotation.z:F6},w={readBack.rotation.w:F6})");
         }
 
         [ApiEndpoint(
@@ -1407,12 +1443,125 @@ namespace TiltBrush
         {
             ValidateSafeFilename(filename, "snapshot filename");
             ValidateSnapshotDimensions(width, height, includesSidecars: true);
+            // Deliberately do NOT activate the MultiCamTool here. While it is the active tool,
+            // MultiCamTool.UpdateCameraManagerTransforms() runs every frame and drives the
+            // capture camera to its own attach point (which follows the user's pointer, and
+            // in the non-preview path is pinned to the VR camera's position) - overwriting the
+            // pose set below, so only the very first capture after activation used the pose we
+            // asked for and every later one silently pointed at the user's viewpoint instead.
+            // Activation isn't needed anyway: ScreenshotManager.TakeSnapshot finds the tool via
+            // GetToolOfType (which works whether or not it is active) and activates the capture
+            // rig itself.
             TrTransform tr = TrTransform.TR(position, Quaternion.Euler(direction));
+            ScreenshotManager.DebugLogToFile(
+                $"app.snapshot: input_position={position} input_direction(euler)={direction} " +
+                $"resulting_TrTransform.translation={tr.translation} " +
+                $"resulting_TrTransform.rotation=(x={tr.rotation.x:F6},y={tr.rotation.y:F6},z={tr.rotation.z:F6},w={tr.rotation.w:F6}) " +
+                $"resulting_TrTransform.rotation.eulerAngles={tr.rotation.eulerAngles} " +
+                $"filename={filename}");
             float superSampling = 1f;
             bool removeBackground = false;
             bool renderDepth = true;
             bool renderNormals = true;
             ScreenshotManager.TakeSnapshot(tr, filename, width, height, superSampling, removeBackground, renderDepth, renderNormals);
+        }
+
+        [ApiEndpoint(
+            "app.snapshot.quat",
+            "Takes a color snapshot and saves depth and normals sidecars, using a directly-supplied quaternion (x,y,z,w) for camera rotation instead of Euler angles",
+            "0,10,0,0,0,0,1,hello,1024,768"
+        )]
+        public static void TakeSnapshotQuat(Vector3 position, Quaternion rotation, string filename, int width, int height)
+        {
+            ValidateSafeFilename(filename, "snapshot filename");
+            ValidateSnapshotDimensions(width, height, includesSidecars: true);
+            // See the note in TakeSnapshot: activating the MultiCamTool makes it drive the
+            // capture camera every frame, which breaks every capture after the first.
+            TrTransform tr = TrTransform.TR(position, rotation);
+            ScreenshotManager.DebugLogToFile(
+                $"app.snapshot.quat: input_position={position} " +
+                $"input_quaternion=(x={rotation.x:F6},y={rotation.y:F6},z={rotation.z:F6},w={rotation.w:F6}) " +
+                $"resulting_TrTransform.translation={tr.translation} " +
+                $"resulting_TrTransform.rotation=(x={tr.rotation.x:F6},y={tr.rotation.y:F6},z={tr.rotation.z:F6},w={tr.rotation.w:F6}) " +
+                $"resulting_TrTransform.rotation.eulerAngles={tr.rotation.eulerAngles} " +
+                $"filename={filename}");
+            float superSampling = 1f;
+            bool removeBackground = false;
+            bool renderDepth = true;
+            bool renderNormals = true;
+            ScreenshotManager.TakeSnapshot(tr, filename, width, height, superSampling, removeBackground, renderDepth, renderNormals);
+        }
+
+        [ApiEndpoint(
+            "camera.intrinsics",
+            "Renders snapshots through a real camera's calibrated intrinsics (OpenCV convention: fx,fy in pixels, cx,cy principal point, and the width,height they were calibrated at). Unlike a plain field of view this also carries a non-centred principal point and non-square pixels. Intrinsics are rescaled automatically if you snapshot at a different resolution with the same aspect ratio",
+            "3163.5317,3163.5317,2289.4466,1102.9255,4096,2160"
+        )]
+        public static void SetCameraIntrinsics(float fx, float fy, float cx, float cy, float refWidth, float refHeight)
+        {
+            if (fx <= 0 || fy <= 0 || refWidth <= 0 || refHeight <= 0)
+            {
+                throw new System.ArgumentException(
+                    "camera.intrinsics: fx, fy, refWidth and refHeight must all be greater than zero.");
+            }
+            ScreenshotManager.SetCalibratedIntrinsics(fx, fy, cx, cy, refWidth, refHeight);
+            ScreenshotManager.DebugLogToFile(
+                $"camera.intrinsics set: fx={fx} fy={fy} cx={cx} cy={cy} ref={refWidth}x{refHeight}");
+        }
+
+        [ApiEndpoint(
+            "camera.intrinsics.clear",
+            "Stops using calibrated intrinsics for snapshots and goes back to the app's normal field-of-view based camera",
+            ""
+        )]
+        public static void ClearCameraIntrinsics()
+        {
+            ScreenshotManager.ClearCalibratedIntrinsics();
+            ScreenshotManager.DebugLogToFile("camera.intrinsics cleared");
+        }
+
+        [ApiEndpoint(
+            "camera.clip",
+            "Sets the snapshot camera's near and far clip planes, in Open Brush units (1 metre = 10 units). Affects the depth sidecar's range as well as what gets rendered",
+            "1,1000"
+        )]
+        public static void SetCameraClip(float near, float far)
+        {
+            if (near <= 0 || far <= near)
+            {
+                throw new System.ArgumentException(
+                    "camera.clip: near must be greater than zero and far must be greater than near.");
+            }
+            ScreenshotManager.SetCalibratedClip(near, far);
+            ScreenshotManager.DebugLogToFile($"camera.clip set: near={near} far={far} (units)");
+        }
+
+        [ApiEndpoint(
+            "camera.clip.clear",
+            "Stops overriding the snapshot camera's clip planes",
+            ""
+        )]
+        public static void ClearCameraClip()
+        {
+            ScreenshotManager.ClearCalibratedClip();
+            ScreenshotManager.DebugLogToFile("camera.clip cleared");
+        }
+
+        [ApiEndpoint(
+            "app.getpose",
+            "TEMP DEBUG: returns the current App.Scene.Pose (user position/rotation) as position, euler, and quaternion, for comparing against Blender ground truth",
+            ""
+        )]
+        public static string GetScenePose()
+        {
+            TrTransform pose = App.Scene.Pose;
+            string result =
+                $"translation(scene.Pose, negate for user world pos)={pose.translation} " +
+                $"userWorldPosition={-pose.translation} " +
+                $"rotation.eulerAngles={pose.rotation.eulerAngles} " +
+                $"rotation.quaternion=(x={pose.rotation.x:F6},y={pose.rotation.y:F6},z={pose.rotation.z:F6},w={pose.rotation.w:F6})";
+            ScreenshotManager.DebugLogToFile($"app.getpose queried: {result}");
+            return result;
         }
 
         internal static void ValidateSnapshotDimensions(

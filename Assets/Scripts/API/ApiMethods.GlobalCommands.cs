@@ -182,6 +182,58 @@ namespace TiltBrush
             LoadNamedFile(filename, realTime: true);
         }
 
+        [ApiEndpoint(
+            "sketch.currenttime",
+            "Sets the current sketch playback time, in milliseconds. Strokes are added or removed to match what existed in the sketch at that moment, using the same timeline as each stroke's control-point timestamps. Requires sketch.scrub to have been enabled, otherwise there is no playback timeline to seek",
+            "5000"
+        )]
+        public static void SetCurrentSketchTimeMs(int ms)
+        {
+            // Only IScenePlayback.Update() acts on CurrentSketchTime, and the playback object
+            // is torn down once a sketch finishes loading - so without it this call would set a
+            // value that nothing reads and appear to do nothing. Fail loudly instead.
+            if (!SketchMemoryScript.m_Instance.IsPlayingBack)
+            {
+                throw new System.InvalidOperationException(
+                    "sketch.currenttime: there is no active playback timeline to seek. " +
+                    "Call sketch.scrub=1 first (it works before or after loading a sketch).");
+            }
+            App.Instance.CurrentSketchTime = ms / 1000.0;
+        }
+
+        [ApiEndpoint(
+            "sketch.scrub",
+            "Keeps the sketch playback timeline alive so sketch.currenttime can seek to any moment, forwards or backwards. Normally the timeline is discarded once a sketch has finished loading, which makes seeking silently do nothing. Safe to call before or after loading: if the timeline has already been discarded it is rebuilt. Seeks are incremental, so stepping forward one frame only renders the strokes that began in that interval",
+            "1"
+        )]
+        public static void SetSketchScrubbing(bool enable)
+        {
+            var sketchMemory = SketchMemoryScript.m_Instance;
+            sketchMemory.m_KeepPlaybackAliveForScrubbing = enable;
+
+            // If a sketch is already loaded its timeline has been torn down, so rebuild it -
+            // otherwise enabling this after loading would appear to work but still not seek.
+            if (enable && !sketchMemory.IsPlayingBack && sketchMemory.GetMemoryList.Count > 0)
+            {
+                foreach (var stroke in sketchMemory.GetMemoryList)
+                {
+                    sketchMemory.UnrenderStrokeMemoryObject(stroke);
+                }
+                sketchMemory.BeginDrawingFromMemory(
+                    bDrawFromStart: true, forEdit: true, playAudio: false);
+            }
+        }
+
+        [ApiEndpoint(
+            "app.timescale",
+            "Sets Unity's global time scale. Use 0 to pause real-time-driven systems (including realtime sketch playback drift) so sketch.currenttime holds exactly where it's set between calls, instead of continuing to advance with wall-clock time. Use 1 to resume normal real-time playback. Same technique already used internally by the multi-cam capture rig for precise, non-drifting captures",
+            "0"
+        )]
+        public static void SetTimeScale(float scale)
+        {
+            UnityEngine.Time.timeScale = scale;
+        }
+
         private static void LoadNamedFile(string filename, bool realTime)
         {
             if (!filename.EndsWith(SaveLoadScript.TILT_SUFFIX))
