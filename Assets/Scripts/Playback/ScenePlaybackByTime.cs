@@ -201,7 +201,8 @@ namespace TiltBrush
             IEnumerable<Stroke> strokes,
             IStrokePlaybackTimeline timeline = null)
         {
-            m_timeline = timeline ?? new SketchTimeStrokePlaybackTimeline();
+            // Per-layer post-production time offsets (no-op when all are zero).
+            m_timeline = PostProductionLayerTimeline.Wrap(timeline ?? new SketchTimeStrokePlaybackTimeline());
             m_targetCanvas = App.ActiveCanvas;
             m_unrenderedStrokes = new SortedLinkedList<Stroke>(
                 (a, b) => (m_timeline.GetHeadTimeMs(a) < m_timeline.GetHeadTimeMs(b)),
@@ -218,7 +219,31 @@ namespace TiltBrush
         }
 
         // Continue drawing stroke for this frame, returning true if more rendering is pending.
+        // TEMP profiling (POSTPROD_FAST_PREVIEW_DESIGN.md step 1): how long the frame that
+        // applies a seek takes, read via query.postprod.debug.timing.
+        public static volatile string LastSeekTiming = "no seek yet";
+        public static volatile string LastFrameTiming = "";
+
         public bool Update()
+        {
+            var seekTimer = System.Diagnostics.Stopwatch.StartNew();
+            long previousTimeMs = m_lastTimeMs;
+            int renderedBefore = m_renderedStrokes.Count;
+            bool result = UpdateInternal();
+            seekTimer.Stop();
+            long currentMs = m_lastTimeMs;
+            string report =
+                $"{previousTimeMs}ms -> {currentMs}ms: {seekTimer.Elapsed.TotalMilliseconds:F1}ms, " +
+                $"rendered strokes {renderedBefore} -> {m_renderedStrokes.Count}";
+            LastFrameTiming = report;
+            if (!m_quickLoadRemaining && System.Math.Abs(currentMs - previousTimeMs) >= 100)
+            {
+                LastSeekTiming = report;
+            }
+            return result;
+        }
+
+        private bool UpdateInternal()
         {
             long currentTimeMs = m_quickLoadRemaining
                 ? long.MaxValue
@@ -277,7 +302,7 @@ namespace TiltBrush
                         {
                             stroke.Init(
                                 node, PointerManager.m_Instance.GetTransientPointer(i),
-                                m_targetCanvas, m_timeline);
+                                node.Value.m_IntendedCanvas ?? m_targetCanvas, m_timeline);
                             stroke.Update();
                             if (stroke.IsDone())
                             {

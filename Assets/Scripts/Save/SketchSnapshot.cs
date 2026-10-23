@@ -169,7 +169,76 @@ namespace TiltBrush
                 SchemaVersion = SketchMetadata.kSchemaVersion,
                 ApplicationName = App.kAppDisplayName,
                 ApplicationVersion = App.Config.m_VersionNumber,
+                PostProduction = GetPostProductionMetadata(),
             };
+        }
+
+        // Returns null (rather than an all-default block) so ordinary sketches that
+        // never touch the post-production preview don't get a spurious empty
+        // "PostProduction" object written into their metadata.json. Public so
+        // PostProductionMetadataSaver's metadata-only save path can reuse it without
+        // duplicating this logic.
+        public static PostProductionMetadata GetPostProductionMetadata()
+        {
+            var metadata = new PostProductionMetadata
+            {
+                SpatialOffset = PostProductionSettings.GlobalSpatialOffset,
+                TimeOffsetMs = PostProductionSettings.GlobalTimeOffsetMs,
+                CropStartFrame = PostProductionSettings.CropStartFrame,
+                CropEndFrame = PostProductionSettings.CropEndFrame,
+                AutoPlateClipDir = PostProductionPreviewController.AutoPlateClipDir,
+                CameraIntrinsics = ScreenshotManager.UseCalibratedProjection
+                    ? new[] {
+                        ScreenshotManager.CalibratedFx, ScreenshotManager.CalibratedFy,
+                        ScreenshotManager.CalibratedCx, ScreenshotManager.CalibratedCy,
+                        ScreenshotManager.CalibratedRefWidth, ScreenshotManager.CalibratedRefHeight
+                    }
+                    : null,
+                CameraClip = ScreenshotManager.UseCalibratedClip
+                    ? new[] { ScreenshotManager.CalibratedNearClip, ScreenshotManager.CalibratedFarClip }
+                    : null,
+                CameraName = PostProductionPreviewController.TargetCameraName,
+                LensCalibration = PostProductionLens.CalibrationArray,
+                LensUndistort = PostProductionLens.HasCalibration ? PostProductionLens.Undistort : (bool?)null,
+                CameraPose = PostProductionPreviewController.HasTargetPose
+                    ? new[] {
+                        PostProductionPreviewController.TargetPosition.x,
+                        PostProductionPreviewController.TargetPosition.y,
+                        PostProductionPreviewController.TargetPosition.z,
+                        PostProductionPreviewController.TargetRotation.x,
+                        PostProductionPreviewController.TargetRotation.y,
+                        PostProductionPreviewController.TargetRotation.z,
+                        PostProductionPreviewController.TargetRotation.w
+                    }
+                    : null,
+                VisibleLayers = GetPostProductionVisibleLayers(),
+            };
+            // With a clip loaded, the camera, lens and plates come from its clip.json on
+            // load; store only the folder so the manifest stays the single source of truth.
+            if (PostProductionClip.IsLoaded)
+            {
+                metadata.ClipDir = PostProductionClip.ClipDir;
+                metadata.AutoPlateClipDir = null;
+                metadata.CameraIntrinsics = null;
+                metadata.CameraClip = null;
+                metadata.CameraPose = null;
+                metadata.LensCalibration = null;
+                metadata.LensUndistort = PostProductionLens.Undistort;
+            }
+            return metadata.IsDefault ? null : metadata;
+        }
+
+        // Null when every layer is visible, so ordinary sketches store nothing.
+        private static int[] GetPostProductionVisibleLayers()
+        {
+            var visible = new List<int>();
+            int count = 0;
+            foreach (var canvas in App.Scene.LayerCanvases)
+            {
+                if (canvas.gameObject.activeSelf) { visible.Add(count); }
+                count++;
+            }
+            return visible.Count == count ? null : visible.ToArray();
         }
 
         public IEnumerator<Timeslice> CreateSnapshotIcons(RenderTexture saveIconTexture,

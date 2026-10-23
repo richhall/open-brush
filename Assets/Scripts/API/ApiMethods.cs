@@ -1505,6 +1505,8 @@ namespace TiltBrush
                     "camera.intrinsics: fx, fy, refWidth and refHeight must all be greater than zero.");
             }
             ScreenshotManager.SetCalibratedIntrinsics(fx, fy, cx, cy, refWidth, refHeight);
+            // The post-production undistorted working frame is built on these intrinsics.
+            PostProductionLens.RecomputeWorkingFrame();
             ScreenshotManager.DebugLogToFile(
                 $"camera.intrinsics set: fx={fx} fy={fy} cx={cx} cy={cy} ref={refWidth}x{refHeight}");
         }

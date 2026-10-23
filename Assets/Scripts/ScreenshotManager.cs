@@ -1060,6 +1060,21 @@ namespace TiltBrush
             s_ProjectionReportJson = "{\"calibrated\":false}";
         }
 
+        // Raw getters for the post-production preview's persistence (stage 8, added
+        // 2026-09-08) - values are stored exactly as passed to
+        // SetCalibratedIntrinsics/SetCalibratedClip (no unit conversion), so these
+        // round-trip directly with the camera.intrinsics/camera.clip API commands.
+        public static bool UseCalibratedProjection => s_UseCalibratedProjection;
+        public static bool UseCalibratedClip => s_UseCalibratedClip;
+        public static float CalibratedFx => s_Fx;
+        public static float CalibratedFy => s_Fy;
+        public static float CalibratedCx => s_Cx;
+        public static float CalibratedCy => s_Cy;
+        public static float CalibratedRefWidth => s_RefWidth;
+        public static float CalibratedRefHeight => s_RefHeight;
+        public static float CalibratedNearClip => s_NearClip;
+        public static float CalibratedFarClip => s_FarClip;
+
         /// Clip planes in Open Brush units (1 metre = App.METERS_TO_UNITS = 10 units),
         /// so a real camera's metric near/far need scaling by 10 before being set here.
         public static void SetCalibratedClip(float near, float far)
@@ -1077,6 +1092,50 @@ namespace TiltBrush
         public static void ClearCalibratedClip()
         {
             s_UseCalibratedClip = false;
+        }
+
+        /// Applies the currently-configured calibrated intrinsics/clip (see
+        /// SetCalibratedIntrinsics/SetCalibratedClip) to an arbitrary camera - for
+        /// the post-production live preview (POSTPROD_PREVIEW_PLAN.md, stage 6),
+        /// which needs to drive whatever camera is currently painting the desktop
+        /// window rather than the snapshot capture rig. Same maths TakeSnapshot
+        /// uses internally, factored out here rather than refactoring that
+        /// existing, already-proven path, to avoid any risk of regressing it.
+        /// A no-op if no calibrated intrinsics are configured.
+        public static void ApplyCalibratedProjectionToCamera(Camera cam)
+        {
+            if (!s_UseCalibratedProjection) { return; }
+
+            int width = cam.pixelWidth;
+            int height = cam.pixelHeight;
+            float sx = width / s_RefWidth;
+            float sy = height / s_RefHeight;
+            float fx = s_Fx * sx, fy = s_Fy * sy;
+            float cx = s_Cx * sx, cy = s_Cy * sy;
+
+            if (s_UseCalibratedClip)
+            {
+                cam.nearClipPlane = s_NearClip;
+                cam.farClipPlane = s_FarClip;
+            }
+
+            float vFovDeg = 2f * Mathf.Atan(height / (2f * fy)) * Mathf.Rad2Deg;
+            cam.fieldOfView = vFovDeg;
+
+            // Assign the projection last - setting fieldOfView can invalidate an
+            // explicitly-assigned projection matrix.
+            cam.projectionMatrix = BuildProjectionFromIntrinsics(
+                fx, fy, cx, cy, width, height, cam.nearClipPlane, cam.farClipPlane);
+
+            RefreshProjectionReport(
+                fx, fy, cx, cy, width, height, cam.nearClipPlane, cam.farClipPlane, "livePreview");
+        }
+
+        /// Restores a camera to Unity's normal FOV-driven projection, undoing
+        /// ApplyCalibratedProjectionToCamera.
+        public static void ClearCalibratedProjectionFromCamera(Camera cam)
+        {
+            cam.ResetProjectionMatrix();
         }
 
         /// OpenCV-style intrinsics -> OpenGL-convention projection matrix.
@@ -1253,7 +1312,9 @@ namespace TiltBrush
                             {
                                 DebugLogToFile("rendering depth...");
                                 rMgr.RenderDepthToTexture(tmp);
+                                DebugLogToFile("depth rendered");
                                 var depthFiles = rMgr.EncodeDepthCapture(tmp);
+                                DebugLogToFile("depth encoded");
                                 SaveDepthCaptureFiles(path, depthFiles);
                                 DebugLogToFile("depth files saved");
                             }
@@ -1279,6 +1340,7 @@ namespace TiltBrush
 
                         DebugLogToFile("rendering color...");
                         rMgr.RenderToTexture(tmp, removeBackground: removeBackground);
+                        DebugLogToFile("color rendered");
                         using (var fs = new FileStream(path, FileMode.Create))
                         {
                             Save(fs, tmp, bSaveAsPng: saveAsPng);

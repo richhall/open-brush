@@ -5442,6 +5442,10 @@ namespace TiltBrush
             QualityControls.m_Instance.ResetAutoQuality();
             InputManager.m_Instance.TriggerHaptics(InputManager.ControllerName.Brush, 0.1f);
             SaveLoadScript.m_Instance.ResetLastFilename();
+            // Post-production: a new sketch has no clip, and the control page should clear.
+            PostProductionClip.Clear();
+            PostProductionSettings.LoadedSketchName = "";
+            PostProductionSettings.LoadCount++;
             SelectionManager.m_Instance.RemoveFromSelection(false);
             PointerManager.m_Instance.ResetSymmetryToHome();
             PointerManager.m_Instance.FinalizeLine(false, true);

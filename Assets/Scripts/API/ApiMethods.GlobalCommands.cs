@@ -15,6 +15,7 @@
 using System.IO;
 using Org.OpenAPITools.Api;
 using Org.OpenAPITools.Client;
+using UnityEngine;
 
 namespace TiltBrush
 {
@@ -65,6 +66,21 @@ namespace TiltBrush
         {
             var rEnum = SketchControlsScript.GlobalCommands.SaveSelected;
             SketchControlsScript.m_Instance.IssueGlobalCommand(rEnum, 1);
+        }
+
+        [ApiEndpoint(
+            "postprod.metadata.save",
+            "Saves ONLY the post-production preview's metadata (offsets, crop, camera setup) into the named .tilt file in the user's Sketches folder - never touches stroke data, copying it verbatim from the existing file instead of re-deriving it from live scene state. Safe regardless of scrub/playback state, unlike save.overwrite/save.new - those were found to silently truncate strokes when saved while sketch.scrub's playback timeline was mid-position (a real incident, 2026-09-08: num_strokes dropped 50 -> 14). Check query.postprod.metadata.save.status for the real result - HTTP 200 alone doesn't confirm success. Directory separators, rooted paths, and parent-directory traversal are rejected. The .tilt suffix is optional",
+            "Untitled_17"
+        )]
+        public static void SavePostProductionMetadata(string filename)
+        {
+            if (!filename.EndsWith(SaveLoadScript.TILT_SUFFIX))
+            {
+                filename += SaveLoadScript.TILT_SUFFIX;
+            }
+            string path = GetSafePathInDirectory(App.UserSketchPath(), filename, "sketch filename");
+            PostProductionMetadataSaver.Save(path);
         }
 
 #if UNITY_EDITOR
@@ -202,6 +218,59 @@ namespace TiltBrush
         }
 
         [ApiEndpoint(
+            "postprod.preview.videotime",
+            "Sets the sketch clock so its mapped C006 video time equals videoTimeMs (inverse of the sketch-time-to-video mapping, using postprod.offset.time.global) - lets you drive the tilt FROM a real-footage moment instead of always scrubbing the tilt and reading off the resulting video time. Requires sketch.scrub=1, same as sketch.currenttime",
+            "49167"
+        )]
+        public static void SetPostProdPreviewVideoTimeMs(int videoTimeMs)
+        {
+            double sketchTimeMs = videoTimeMs - PostProductionSettings.GlobalTimeOffsetMs;
+            SetCurrentSketchTimeMs(Mathf.RoundToInt((float)sketchTimeMs));
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.videoframe",
+            "Sets the sketch clock so its mapped C006 video frame equals c006Frame - same as postprod.preview.videotime but in native (60fps) frame numbers, matching the depth_frames/color_frames naming convention. Requires sketch.scrub=1, same as sketch.currenttime",
+            "2950"
+        )]
+        public static void SetPostProdPreviewVideoFrame(int c006Frame)
+        {
+            double sketchTimeMs = PostProductionSettings.C006FrameToSketchTimeMs(c006Frame);
+            SetCurrentSketchTimeMs(Mathf.RoundToInt((float)sketchTimeMs));
+        }
+
+        [ApiEndpoint(
+            "postprod.crop.start",
+            "Sets the video crop start frame (C006 native frame number) - the first frame of the real-footage plate actually used for the final render. Part of the in-app post-production compositing preview; not yet consumed by anything (stage 9 final render isn't built), but persisted with the sketch (stage 8). See postprod.crop.clear to reset back to \"use the full available range\"",
+            "2950"
+        )]
+        public static void SetPostProdCropStartFrame(int frame)
+        {
+            PostProductionSettings.CropStartFrame = frame;
+        }
+
+        [ApiEndpoint(
+            "postprod.crop.end",
+            "Sets the video crop end frame (C006 native frame number) - the last frame of the real-footage plate actually used for the final render. See postprod.crop.start",
+            "8830"
+        )]
+        public static void SetPostProdCropEndFrame(int frame)
+        {
+            PostProductionSettings.CropEndFrame = frame;
+        }
+
+        [ApiEndpoint(
+            "postprod.crop.clear",
+            "Clears both video crop start/end frames back to \"use the full available range\"",
+            ""
+        )]
+        public static void ClearPostProdCrop()
+        {
+            PostProductionSettings.CropStartFrame = null;
+            PostProductionSettings.CropEndFrame = null;
+        }
+
+        [ApiEndpoint(
             "sketch.scrub",
             "Keeps the sketch playback timeline alive so sketch.currenttime can seek to any moment, forwards or backwards. Normally the timeline is discarded once a sketch has finished loading, which makes seeking silently do nothing. Safe to call before or after loading: if the timeline has already been discarded it is rebuilt. Seeks are incremental, so stepping forward one frame only renders the strokes that began in that interval",
             "1"
@@ -232,6 +301,351 @@ namespace TiltBrush
         public static void SetTimeScale(float scale)
         {
             UnityEngine.Time.timeScale = scale;
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.time.global",
+            "Sets the global temporal offset (milliseconds) applied when mapping sketch time to the real-footage plate/depth frame, on top of each layer's own offset. May be negative if the tilt is ahead of the video. Part of the in-app post-production compositing preview",
+            "-120"
+        )]
+        public static void SetPostProdGlobalTimeOffset(int ms)
+        {
+            PostProductionSettings.GlobalTimeOffsetMs = ms;
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.time.layer",
+            "Sets a per-layer (per-dancer) time offset in milliseconds, on top of the global offset: video time = sketch time + global + layer. The layer's strokes are redrawn shifted by this amount (the video plate follows the global offset only). May be negative. Rebuilds the scrub timeline, keeping the current sketch time",
+            "1,-40"
+        )]
+        public static void SetPostProdLayerTimeOffset(int layer, int ms)
+        {
+            if (PostProductionSettings.GetLayerTimeOffsetMs(layer) == ms) { return; }
+            PostProductionSettings.SetLayerTimeOffsetMs(layer, ms);
+            SketchMemoryScript.m_Instance.RebuildPlaybackKeepingTime();
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.global",
+            "Sets the global spatial offset (position, Euler rotation, uniform scale) composed with the scene's real pose when previewing/rendering the post-production composite. Never modifies the scene's actual pose",
+            "0,0,0,0,0,0,1"
+        )]
+        public static void SetPostProdGlobalSpatialOffset(Vector3 position, Vector3 rotation, float scale)
+        {
+            PostProductionSettings.GlobalSpatialOffset =
+                TrTransform.TRS(position, Quaternion.Euler(rotation), scale);
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.global.quat",
+            "Same as postprod.offset.spatial.global but takes a quaternion (x,y,z,w) instead of Euler angles",
+            "0,0,0,0,0,0,1,1"
+        )]
+        public static void SetPostProdGlobalSpatialOffsetQuat(Vector3 position, Quaternion rotation, float scale)
+        {
+            PostProductionSettings.GlobalSpatialOffset = TrTransform.TRS(position, rotation, scale);
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.layer",
+            "Sets a per-layer spatial offset (position, Euler rotation, uniform scale), composed with the global offset and that layer's real pose when previewing/rendering it in the post-production composite. Never modifies the layer's actual pose",
+            "1,0,0,0,0,0,0,1"
+        )]
+        public static void SetPostProdLayerSpatialOffset(
+            int layer, Vector3 position, Vector3 rotation, float scale)
+        {
+            PostProductionSettings.SetLayerSpatialOffset(
+                layer, TrTransform.TRS(position, Quaternion.Euler(rotation), scale));
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.layer.quat",
+            "Same as postprod.offset.spatial.layer but takes a quaternion (x,y,z,w) instead of Euler angles",
+            "1,0,0,0,0,0,0,1,1"
+        )]
+        public static void SetPostProdLayerSpatialOffsetQuat(
+            int layer, Vector3 position, Quaternion rotation, float scale)
+        {
+            PostProductionSettings.SetLayerSpatialOffset(layer, TrTransform.TRS(position, rotation, scale));
+        }
+
+        [ApiEndpoint(
+            "postprod.plate.load",
+            "Loads the real-footage preview proxy video and depth EXR sequence for the post-production compositing preview. videoPath and depthFramesDir are absolute paths",
+            "D:/Alison-Goodyear-Postproduction/OpenBrushMedia/C006/proxy_c006.mp4,D:/Alison-Goodyear-Postproduction/OpenBrushMedia/C006/depth_frames"
+        )]
+        public static void LoadPostProdPlate(string videoPath, string depthFramesDir)
+        {
+            PostProductionMediaLoader.Instance.LoadClip(videoPath, depthFramesDir);
+        }
+
+        [ApiEndpoint(
+            "postprod.plate.seek",
+            "Seeks the post-production preview's proxy video and loads the matching real-footage depth EXR frame, addressed by C006 native video frame number",
+            "2960"
+        )]
+        public static void SeekPostProdPlate(int c006Frame)
+        {
+            PostProductionMediaLoader.Instance.SeekToC006Frame(c006Frame);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview",
+            "Toggles the post-production live preview on the camera already painting the window (stage 6): applies the calibrated intrinsics/clip set via camera.intrinsics/camera.clip. 0 restores normal viewing",
+            "1"
+        )]
+        public static void SetPostProdPreview(bool enable)
+        {
+            PostProductionPreviewController.Instance.SetEnabled(enable);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.camera",
+            "Sets which camera postprod.preview drives, by exact GameObject name (see query.postprod.debug.allcameras for a list). Empty name reverts to the default, App.VrSdk.GetVrCamera()",
+            "CenterEyeAnchor"
+        )]
+        public static void SetPostProdPreviewCameraName(string name)
+        {
+            PostProductionPreviewController.SetTargetCameraName(name);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.pose",
+            "Sets the calibrated extrinsics (real-camera position, quaternion x,y,z,w) for postprod.preview's target camera - applied the same way app.snapshot.quat positions the capture rig (App.Scene.AsScene, bypassing SanitizePose's tilt protection), reapplied every frame",
+            "-0.4743,14.2147,-11.5124,0.070337,0.003137,0.001319,0.997518"
+        )]
+        public static void SetPostProdPreviewPose(Vector3 position, Quaternion rotation)
+        {
+            PostProductionPreviewController.SetTargetPose(position, rotation);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.refreshcg",
+            "Captures a fresh CG colour+depth snapshot from the calibrated pose (set via postprod.preview.pose) at the current sketch time, to a fixed filename (see query.postprod.preview.status for the paths). Reuses the existing snapshot mechanism (app.snapshot.quat) rather than a separate live-capture path - see POSTPROD_PREVIEW_PLAN.md's stage 6 notes",
+            "4096,2160"
+        )]
+        public static void RefreshPostProdCgCapture(int width, int height)
+        {
+            PostProductionPreviewController.RefreshCgCapture(width, height);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.plate",
+            "Sets the plate colour/depth file paths the live preview composites against. Once set (and a CG capture exists via postprod.preview.refreshcg), postprod.preview shows the full depth-aware composite instead of just the raw calibrated CG view",
+            "C:/plate.png,C:/plate_depth.exr"
+        )]
+        public static void SetPostProdPreviewPlate(string colorPath, string depthPath)
+        {
+            PostProductionPreviewController.SetPlate(colorPath, depthPath);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.autoplate",
+            "Stage 2: keeps the plate synced to the current sketch time automatically (using postprod.offset.time.global and the clip's depth_frames/manifest.json), instead of computing and setting postprod.preview.plate by hand for every scrub. clipDir must contain color_frames/ and depth_frames/ subfolders using the true-frame-number naming convention. Empty string disables it",
+            "D:/Alison-Goodyear-Postproduction/OpenBrushMedia/C006"
+        )]
+        public static void SetPostProdPreviewAutoPlate(string clipDir)
+        {
+            PostProductionPreviewController.SetAutoPlateClipDir(clipDir);
+        }
+
+        [ApiEndpoint(
+            "postprod.clip.load",
+            "Loads a clip's whole setup from <clipDir>/clip.json (clipDir relative to the Media Library, e.g. PostProd/C006, as listed by query.postprod.list.clips, or absolute), written by preprocessing (make_clip_manifest.py): camera intrinsics, lens distortion, camera pose (ChArUco board corner as origin), near/far, source fps, and the plate folders for auto-plate and fast plates. The sketch saves only the folder (postprod.metadata.save) and re-reads the manifest when loaded. Result in query.postprod.clip.status",
+            "PostProd/C006"
+        )]
+        public static void LoadPostProdClip(string clipDir)
+        {
+            PostProductionClip.Load(clipDir);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.naivemode",
+            "Toggles the live preview's compositing mode: naive (CG always shown where it has geometry, no depth test) vs depth-aware (default, off)",
+            "1"
+        )]
+        public static void SetPostProdPreviewNaiveMode(bool naive)
+        {
+            PostProductionPreviewController.SetNaiveMode(naive);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.livecg",
+            "Fast preview: renders the calibrated CG colour and depth live every frame into low-res render textures and composites them directly (no snapshot files), instead of using the last postprod.preview.refreshcg capture. 0 returns to the snapshot path. See POSTPROD_FAST_PREVIEW_DESIGN.md",
+            "1"
+        )]
+        public static void SetPostProdPreviewLiveCg(bool enabled)
+        {
+            PostProductionLiveCg.Enabled = enabled;
+            if (!enabled) { PostProductionLiveCg.LastStatus = "live CG off"; }
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.livecg.resolution",
+            "Sets a fixed live CG render resolution. By default (or with 0,0) it matches the displayed camera's pixel size, which avoids stair-stepped stroke edges from upscaling",
+            "0,0"
+        )]
+        public static void SetPostProdPreviewLiveCgResolution(int width, int height)
+        {
+            PostProductionLiveCg.SetResolution(width, height);
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.nudge",
+            "Nudges a spatial offset relative to the calibrated camera's view. target: -1 = global (whole sketch), 0..N-1 = that layer. forward/back (metres, along the camera's view direction flattened onto the floor), right/left (metres, camera's horizontal right axis), yaw (degrees, about the vertical axis through a floor pivot under the centre of the target's strokes). Composes onto the stored offset. Readout in query.postprod.offset.spatial.readout=<target>",
+            "-1,0.05,0,0"
+        )]
+        public static void NudgePostProdSpatialOffset(int target, float forwardMetres, float rightMetres, float yawDegrees)
+        {
+            PostProductionAlignment.Nudge(target, forwardMetres, rightMetres, yawDegrees);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.shuttle",
+            "Plays the sketch clock at a rate driven inside Open Brush each frame: 1 = real time, 0.25 = quarter speed, negative = reverse, 0 = hold still. Only the sketch clock is controlled; Unity's game clock keeps running (and is set back to normal speed), so lighting and animation behave. Seeks from elsewhere are adopted. Requires sketch.scrub=1",
+            "0.25"
+        )]
+        public static void SetPostProdPreviewShuttle(float rate)
+        {
+            if (rate != 0f && !SketchMemoryScript.m_Instance.IsPlayingBack)
+            {
+                throw new System.InvalidOperationException(
+                    "postprod.preview.shuttle: no active playback timeline. Call sketch.scrub=1 first.");
+            }
+            PostProductionPreviewController.SetShuttleRate(rate);
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.revert",
+            "Reverts a spatial offset to what it was when the sketch was loaded or last saved with postprod.metadata.save (to back out experimental nudges). target: -1 = global, 0..N-1 = that layer",
+            "-1"
+        )]
+        public static void RevertPostProdSpatialOffset(int target)
+        {
+            PostProductionAlignment.Revert(target);
+        }
+
+        [ApiEndpoint(
+            "postprod.offset.spatial.reset",
+            "Clears a spatial offset to none. target: -1 = global, 0..N-1 = that layer",
+            "-1"
+        )]
+        public static void ResetPostProdSpatialOffset(int target)
+        {
+            PostProductionAlignment.Reset(target);
+        }
+
+        [ApiEndpoint(
+            "postprod.lens",
+            "Sets the real camera's lens calibration (OpenCV convention): fx,fy,cx,cy in pixels at the camera.intrinsics reference resolution, then distortion k1,k2,p1,p2,k3. Used to undistort the plate (postprod.preview.lens.undistort) into an overscanned working frame. Status in query.postprod.lens.status",
+            "3163.53165,3165.07069,2289.44663,1102.92551,-0.0241422,-0.0144468,0.00272838,0.00588623,0.01740761"
+        )]
+        public static void SetPostProdLens(float fx, float fy, float cx, float cy,
+            float k1, float k2, float p1, float p2, float k3)
+        {
+            PostProductionLens.SetCalibration(fx, fy, cx, cy, k1, k2, p1, p2, k3);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.lens.undistort",
+            "Works fully undistorted (1): the live CG renders a slightly larger (overscanned) pinhole frame and the plate colour and depth are undistorted into it, so nothing from the real frame is lost. Needs postprod.lens, camera.intrinsics and live CG. 0 composites over the raw distorted plate",
+            "1"
+        )]
+        public static void SetPostProdLensUndistort(bool enabled)
+        {
+            PostProductionLens.Undistort = enabled;
+            PostProductionLens.RecomputeWorkingFrame();
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.fastplates",
+            "Fast preview plates: serves the plate from a RAM cache of the low-res preview set (<clipDir>/preview_1280x676 colour + depth_frames EXRs) around the playhead, instead of loading full-res files on every frame change. Needs postprod.preview.autoplate set first. 0 returns to full-res plates. Result in query.postprod.preview.fastplates.status",
+            "1"
+        )]
+        public static void SetPostProdPreviewFastPlates(bool enabled)
+        {
+            string error = PostProductionPlateCache.SetEnabled(
+                enabled, PostProductionPreviewController.AutoPlateClipDir);
+            if (error != null) { PostProductionPlateCache.LastStatus = "error: " + error; }
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.fastplates.decoders",
+            "Sets how many depth frames the fast plate cache decodes at once (each is ~110ms on a fast machine; 1x playback needs 30 a second). 0 restores the default, a quarter of the machine's processor threads, between 2 and 8. Applied straight away if fast plates are on. The count in use is shown in query.postprod.preview.fastplates.status",
+            "8"
+        )]
+        public static void SetPostProdFastPlateDecoders(int count)
+        {
+            PostProductionPlateCache.SetDepthDecoders(count);
+            if (PostProductionPlateCache.Enabled)
+            {
+                string error = PostProductionPlateCache.SetEnabled(true, PostProductionPreviewController.AutoPlateClipDir);
+                if (error != null) { PostProductionPlateCache.LastStatus = "error: " + error; }
+            }
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.livecg.bloom",
+            "Turns bloom on (1) or off (0) for the live CG, using the snapshot camera's own bloom effect and settings. Off by default",
+            "1"
+        )]
+        public static void SetPostProdPreviewLiveCgBloom(bool enabled)
+        {
+            PostProductionLiveCg.Bloom = enabled;
+        }
+
+        [ApiEndpoint(
+            "postprod.debug.livecg.dump",
+            "TEMP parity test: writes the current live CG frame to <basePath>.png and <basePath>_depth.exr (metres), decoded exactly as the snapshot path does, for comparison against a snapshot taken at the same resolution. Result in query.postprod.preview.livecg.status",
+            "D:/Alison-Goodyear-Postproduction/livecg_parity/live"
+        )]
+        public static void DumpPostProdLiveCg(string basePath)
+        {
+            PostProductionLiveCg.LastDumpStatus = PostProductionLiveCg.Dump(basePath);
+        }
+
+        [ApiEndpoint(
+            "postprod.preview.cgonly",
+            "Shows the live calibrated CG view only, with no real-footage plate composited behind it - ignores whatever plate is currently configured (without discarding it, so toggling this off returns to compositing against it). 0 restores normal compositing",
+            "1"
+        )]
+        public static void SetPostProdPreviewCgOnly(bool cgOnly)
+        {
+            PostProductionPreviewController.SetCgOnlyMode(cgOnly);
+        }
+
+        [ApiEndpoint(
+            "postprod.debug.dumpcameras",
+            "TEMP DEBUG: captures a listing of every enabled Camera in the scene (read via query.postprod.debug.allcameras). Not part of the real feature surface",
+            ""
+        )]
+        public static void DumpAllCameras()
+        {
+            PostProductionPreviewController.CaptureAllCamerasReport();
+        }
+
+        [ApiEndpoint(
+            "postprod.compositor.test",
+            "TEMP DEBUG / regression test: runs the stage-5 depth-aware compositor on four explicit file paths (cgColorPng, cgDepthExr, plateColorPng, plateDepthExr) and writes the result to outputPng, for comparison against the existing make_composite_video.py output. Not part of the real feature surface",
+            "C:/cg.png,C:/cg_depth.exr,C:/plate.png,C:/plate_depth.exr,C:/out.png,false"
+        )]
+        public static void TestPostProdCompositor(
+            string cgColorPath, string cgDepthPath, string plateColorPath, string plateDepthPath,
+            string outputPath, bool naiveMode)
+        {
+            PostProdCompositor.TestFromFiles(
+                cgColorPath, cgDepthPath, plateColorPath, plateDepthPath, outputPath, naiveMode);
+        }
+
+        [ApiEndpoint(
+            "postprod.compositor.debugalign",
+            "TEMP DEBUG: renders the depth/colour sampling-alignment visualization (red=CG depth texture says geometry, green=CG colour texture shows a bright stroke, sampled through the real GPU pipeline) to outputPng. Not part of the real feature surface",
+            "C:/cg.png,C:/cg_depth.exr,C:/align.png"
+        )]
+        public static void DebugPostProdCompositorAlignment(
+            string cgColorPath, string cgDepthPath, string outputPath)
+        {
+            PostProdCompositor.DebugDepthColorAlignment(cgColorPath, cgDepthPath, outputPath);
         }
 
         private static void LoadNamedFile(string filename, bool realTime)
