@@ -212,6 +212,7 @@ namespace TiltBrush
                     }
                     : null,
                 VisibleLayers = GetPostProductionVisibleLayers(),
+                DepthFilter = PostProductionSettings.DepthNearest ? null : "bilinear",
             };
             // With a clip loaded, the camera, lens and plates come from its clip.json on
             // load; store only the folder so the manifest stays the single source of truth.

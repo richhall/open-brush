@@ -85,6 +85,37 @@ namespace TiltBrush
         // query.postprod.preview.status in ApiManager.cs).
         public static string LastStatus { get; private set; } = "not started";
 
+        // Editor Play sessions keep static state (no domain reload); start with the preview off
+        // and no camera setup, as a build does. The instance went with the previous scene.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            m_Instance = null;
+            s_TargetCameraName = "";
+            s_HasTargetPose = false;
+            s_TargetPosition = Vector3.zero;
+            s_TargetRotation = Quaternion.identity;
+            s_AutoPlateClipDir = "";
+            s_LastAutoPlateFrame = int.MinValue;
+            LastAutoPlateStatus = "auto-plate sync not enabled";
+            LastStatus = "not started";
+            PreviewOn = false;
+            s_LastSketchTimeMs = 0;
+            s_Transport = Transport.Off;
+            s_ShuttleRate = 0;
+            s_LastSetSketchTime = 0;
+            s_HaveLastSet = false;
+            System.Array.Clear(s_FrameTimes, 0, s_FrameTimes.Length);
+            s_FrameIndex = 0;
+            FrameStats = "no frames yet";
+            s_LastGcCount = 0;
+            LayerVisibility = "";
+            LayerNames = "";
+            CgCaptureCount = 0;
+            LastCgCaptureStatus = "not captured yet";
+            AllCamerasReport = "not captured yet";
+        }
+
         public static void SetTargetCameraName(string name)
         {
             s_TargetCameraName = name ?? "";
@@ -137,7 +168,7 @@ namespace TiltBrush
             if (requestedFrame == s_LastAutoPlateFrame) { return; }
             s_LastAutoPlateFrame = requestedFrame;
 
-            string depthFramesDir = System.IO.Path.Combine(s_AutoPlateClipDir, "depth_frames");
+            string depthFramesDir = System.IO.Path.Combine(s_AutoPlateClipDir, PostProductionClip.PreviewDepthDir);
             string colorFramesDir = System.IO.Path.Combine(s_AutoPlateClipDir, "color_frames");
             try
             {
@@ -174,11 +205,115 @@ namespace TiltBrush
         // stuck at the calibrated pose.
         private bool m_HasPrePreviewPose;
         private TrTransform m_PrePreviewPose;
+        // The calibrated projection also sets the camera's clip planes and field of view;
+        // Preview Off puts the camera's own back (2026-10-25: left at the clip's 1-1000 units,
+        // a new sketch opened to a black view instead of the environment).
+        private bool m_HasPrePreviewLens;
+        private float m_PrePreviewNear, m_PrePreviewFar, m_PrePreviewFov;
+
+        // Mirrors Enabled for the HTTP thread (query.postprod.preview.settings).
+        public static volatile bool PreviewOn;
+
+        // A loaded clip is ready to preview: preview on, with the live CG and fast plates (the
+        // only preview paths offered since 2026-10-24; full quality is the export's job).
+        public static void StartPreviewForClip()
+        {
+            PostProductionLiveCg.Enabled = true;
+            string error = PostProductionPlateCache.SetEnabled(true, s_AutoPlateClipDir);
+            if (error != null) { PostProductionPlateCache.LastStatus = "error: " + error; }
+            Instance.SetEnabled(true);
+        }
+
+        // postprod.load quick-loads the sketch, which leaves the scrub timeline finished at the
+        // end; once loading is over the timeline is restarted and the playhead goes to the
+        // export range start, else the first frame that can be composited, else the sketch
+        // start (2026-10-24).
+        public static void MovePlayheadAfterLoad()
+        {
+            App.Instance.StateChanged -= OnAppStateChangedAfterLoad;
+            App.Instance.StateChanged += OnAppStateChangedAfterLoad;
+        }
+
+        private static void OnAppStateChangedAfterLoad(App.AppState oldState, App.AppState newState)
+        {
+            if (newState != App.AppState.Standard) { return; }
+            App.Instance.StateChanged -= OnAppStateChangedAfterLoad;
+            var memory = SketchMemoryScript.m_Instance;
+            if (!memory.m_KeepPlaybackAliveForScrubbing)
+            {
+                Debug.Log("[PostProd] load: finished, not scrubbing so the playhead stays at the end");
+                return;
+            }
+            memory.RestartScrubPlayback();
+            double startMs = LoadStartSketchTimeMs(out string from);
+            App.Instance.CurrentSketchTime = startMs / 1000.0;
+            s_HaveLastSet = false;
+            Debug.Log($"[PostProd] load: finished, playhead at {from}, sketch time {startMs:F0}ms");
+        }
+
+        private static double LoadStartSketchTimeMs(out string from)
+        {
+            int? frame = PostProductionSettings.CropStartFrame;
+            from = $"export range start (frame {frame})";
+            if (frame == null)
+            {
+                frame = PostProductionPlateCache.FirstCompositableFrame;
+                from = $"clip start (frame {frame})";
+            }
+            if (frame == null)
+            {
+                from = "sketch start";
+                return 0;
+            }
+            // Before the sketch begins the preview can't go (its clock stops at 0).
+            return System.Math.Max(0.0, PostProductionSettings.C006FrameToSketchTimeMs(frame.Value));
+        }
+
+        // New Sketch ends a post-production session: nothing it set up may carry over into the
+        // next sketch (2026-10-25). The camera gets its own projection and pose back, the
+        // plate loader and transport stop, and the clip, calibrated camera, lens and every
+        // offset, range and setting are cleared, as at the start of a session.
+        public static void EndSession()
+        {
+            PostProductionExport.Cancel();
+            if (m_Instance != null && m_Instance.Enabled) { m_Instance.SetEnabled(false); }
+            PostProductionPlateCache.SetEnabled(false, null);
+            s_Transport = Transport.Off;
+            s_HaveLastSet = false;
+            SketchMemoryScript.m_Instance.m_KeepPlaybackAliveForScrubbing = false;
+            s_TargetCameraName = "";
+            s_HasTargetPose = false;
+            s_AutoPlateClipDir = "";
+            s_LastAutoPlateFrame = int.MinValue;
+            LastAutoPlateStatus = "auto-plate sync not enabled";
+            PostProductionCompositeImageEffect.NaiveMode = false;
+            PostProductionCompositeImageEffect.CgOnlyMode = false;
+            PostProductionLiveCg.Bloom = false;
+            PostProductionClip.Clear();
+            PostProductionLens.Clear();
+            ScreenshotManager.ClearCalibratedCamera();
+            PostProductionSettings.ClearSession();
+            PostProductionSettings.LoadCount++;
+            Debug.Log("[PostProd] session ended (new sketch)");
+        }
+
+        // Every preview setting the control page shows, as key=value pairs.
+        public static string SettingsReadout()
+        {
+            return $"preview={(PreviewOn ? 1 : 0)} " +
+                $"occlusion={(PostProductionCompositeImageEffect.NaiveMode ? "off" : "depth")} " +
+                $"background={(PostProductionCompositeImageEffect.CgOnlyMode ? "cg" : "video")} " +
+                $"lens={(PostProductionLens.Undistort ? "undistorted" : "raw")} " +
+                $"bloom={(PostProductionLiveCg.Bloom ? 1 : 0)} " +
+                $"depth={(PostProductionSettings.DepthNearest ? "nearest" : "bilinear")} " +
+                $"livecg={(PostProductionLiveCg.Enabled ? 1 : 0)} fastplates={(PostProductionPlateCache.Enabled ? 1 : 0)}";
+        }
 
         public void SetEnabled(bool enabled)
         {
             bool wasEnabled = Enabled;
             Enabled = enabled;
+            PreviewOn = enabled;
             Camera cam = FindTargetCamera();
             if (cam == null)
             {
@@ -194,6 +329,13 @@ namespace TiltBrush
                     m_PrePreviewPose = App.Scene.AsScene[cam.transform];
                     m_HasPrePreviewPose = true;
                 }
+                if (!wasEnabled)
+                {
+                    m_PrePreviewNear = cam.nearClipPlane;
+                    m_PrePreviewFar = cam.farClipPlane;
+                    m_PrePreviewFov = cam.fieldOfView;
+                    m_HasPrePreviewLens = true;
+                }
                 ScreenshotManager.ApplyCalibratedProjectionToCamera(cam);
                 ApplyTargetPose(cam);
                 if (cam.GetComponent<PostProductionCompositeImageEffect>() == null)
@@ -204,6 +346,13 @@ namespace TiltBrush
             else
             {
                 ScreenshotManager.ClearCalibratedProjectionFromCamera(cam);
+                if (wasEnabled && m_HasPrePreviewLens)
+                {
+                    cam.nearClipPlane = m_PrePreviewNear;
+                    cam.farClipPlane = m_PrePreviewFar;
+                    cam.fieldOfView = m_PrePreviewFov;
+                    m_HasPrePreviewLens = false;
+                }
                 if (wasEnabled && m_HasPrePreviewPose)
                 {
                     App.Scene.AsScene[cam.transform] = m_PrePreviewPose;
@@ -314,6 +463,8 @@ namespace TiltBrush
         {
             RecordFrameTime();
             UpdateTransport();
+            // After the transport, before stroke playback: an export seeks the sketch here.
+            PostProductionExport.Stage();
 
             double rawSketchTimeMs = App.Instance.CurrentSketchTime * 1000.0;
             s_LastSketchTimeMs = rawSketchTimeMs >= SketchTimeSentinelThresholdMs ? 0.0 : rawSketchTimeMs;
@@ -340,30 +491,67 @@ namespace TiltBrush
             // etc.) drives this camera's transform independently.
             ScreenshotManager.ApplyCalibratedProjectionToCamera(cam);
             ApplyTargetPose(cam);
-            UpdateAutoPlate();
+            // The preview's plate would chase every export frame and compete with the export
+            // for the disk; it resumes when the export ends.
+            if (!PostProductionExport.IsRunning) { UpdateAutoPlate(); }
             ReportStatus(cam, "Update");
         }
 
-        // Live CG renders after every Update (stroke playback included) has run this
-        // frame, so it reflects the current sketch time.
+        // During an export the Game window shows the frames being written, letterboxed, with
+        // progress on top, instead of a preview frozen at its last frame.
+        private GUIStyle m_ExportOverlayStyle;
+
+        private void OnGUI()
+        {
+            Texture frame = PostProductionExport.DisplayTexture;
+            if (!PostProductionExport.IsRunning) { return; }
+            if (Event.current.type != EventType.Repaint) { return; }
+            var screen = new Rect(0, 0, Screen.width, Screen.height);
+            GUI.DrawTexture(screen, Texture2D.blackTexture);
+            if (frame != null) { GUI.DrawTexture(screen, frame, ScaleMode.ScaleToFit, false); }
+            if (m_ExportOverlayStyle == null)
+            {
+                m_ExportOverlayStyle = new GUIStyle(GUI.skin.box)
+                {
+                    fontSize = Mathf.Max(14, Screen.height / 40),
+                    alignment = TextAnchor.MiddleLeft,
+                    padding = new RectOffset(12, 12, 8, 8),
+                };
+                m_ExportOverlayStyle.normal.textColor = Color.white;
+            }
+            var content = new GUIContent(PostProductionExport.OverlayText());
+            Vector2 size = m_ExportOverlayStyle.CalcSize(content);
+            GUI.Box(new Rect(16, 16, size.x, size.y), content, m_ExportOverlayStyle);
+        }
+
         // "1,1,0,1": each layer's visibility, for query.postprod.layers.visible (the HTTP
         // thread can't read canvases itself).
         public static string LayerVisibility { get; private set; } = "";
+        // Layer names in the same order, one per line, for query.postprod.layers.names.
+        public static string LayerNames { get; private set; } = "";
 
         private static void RefreshLayerVisibility()
         {
             if (App.Scene == null) { return; }
             var flags = new System.Text.StringBuilder();
+            var names = new System.Text.StringBuilder();
             foreach (var canvas in App.Scene.LayerCanvases)
             {
-                if (flags.Length > 0) { flags.Append(','); }
+                if (flags.Length > 0) { flags.Append(','); names.Append('\n'); }
                 flags.Append(canvas.gameObject.activeSelf ? '1' : '0');
+                names.Append(canvas.name);
             }
             LayerVisibility = flags.ToString();
+            LayerNames = names.ToString();
         }
 
+        // Live CG renders after every Update (stroke playback included) has run this
+        // frame, so it reflects the current sketch time. During an export only the export
+        // renders (the display keeps its last preview frame).
         private void LateUpdate()
         {
+            PostProductionExport.Render();
+            if (PostProductionExport.IsRunning) { return; }
             if (!Enabled || !PostProductionLiveCg.Enabled) { return; }
             Camera cam = FindTargetCamera();
             if (cam == null) { return; }
@@ -485,6 +673,8 @@ namespace TiltBrush
                     $"targetDisplay={c.targetDisplay} enabled={c.enabled} " +
                     $"fov={c.fieldOfView:F2} pixelSize={c.pixelWidth}x{c.pixelHeight} " +
                     $"clearFlags={c.clearFlags} cullingMask={c.cullingMask} " +
+                    $"near={c.nearClipPlane:F3} far={c.farClipPlane:F1} " +
+                    $"pos={c.transform.position.ToString("F2")} rot={c.transform.rotation.eulerAngles.ToString("F1")} " +
                     $"targetTexture={(c.targetTexture != null ? c.targetTexture.name : "null")}\n");
             }
             AllCamerasReport = sb.ToString();

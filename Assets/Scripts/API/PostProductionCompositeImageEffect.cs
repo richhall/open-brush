@@ -70,6 +70,22 @@ namespace TiltBrush
         public static volatile string LastCgLoadTiming = "no CG reload yet";
         public static volatile string LastPlateLoadTiming = "no plate reload yet";
 
+        // Editor Play sessions keep static state (no domain reload). The cached helper
+        // textures and material are kept: their getters recreate them if they were destroyed.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            NaiveMode = false;
+            CgOnlyMode = false;
+            s_CgDirty = true;
+            s_PlateDirty = false;
+            s_PlateColorPath = "";
+            s_PlateDepthPath = "";
+            LastStatus = "not started";
+            LastCgLoadTiming = "no CG reload yet";
+            LastPlateLoadTiming = "no plate reload yet";
+        }
+
         // Called whenever a fresh CG capture has been written (see
         // PostProductionPreviewController.RefreshCgCapture), so the next
         // OnRenderImage reloads it from disk instead of reusing a stale texture.

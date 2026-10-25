@@ -1523,6 +1523,18 @@ namespace TiltBrush
             m_ScenePlayback.Update();
         }
 
+        // Starts a fresh scrub timeline from undrawn strokes. Unlike RebuildPlaybackKeepingTime
+        // this doesn't rewind through the old timeline, so it also works on a discarded one or
+        // one left finished by a quick load (which pins it to the end for good).
+        public void RestartScrubPlayback()
+        {
+            foreach (var stroke in m_MemoryList)
+            {
+                UnrenderStrokeMemoryObject(stroke);
+            }
+            BeginDrawingFromMemory(bDrawFromStart: true, forEdit: true, playAudio: false);
+        }
+
         // Redraw scene instantly and optionally re-sort by timestamp-- will drop frames and thrash mem.
         // For use by internal tools which mutate MemoryObjects.
         public void Redraw(bool doSort)

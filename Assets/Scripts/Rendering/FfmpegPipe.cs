@@ -273,12 +273,15 @@ namespace TiltBrush
         }
 
         // Returns false if ffmpeg fails to start.
-        // Note that sampleRate is FPS for video and sample rate in Hz for audio
+        // Note that sampleRate is FPS for video and sample rate in Hz for audio.
+        // customArguments, if given, replaces the built-in ffmpeg command line entirely (the
+        // post-production export uses it for ProRes and for frame-exact decoding); source
+        // still decides the direction ("pipe:..." = writing frames to ffmpeg).
         public bool Start(string source, string outputFile, int width, int height, float sampleRate,
-                          bool blocking)
+                          bool blocking, string customArguments = null)
         {
             m_outputFile = "";
-            if (!LaunchEncoder(source, outputFile, width, height, sampleRate))
+            if (!LaunchEncoder(source, outputFile, width, height, sampleRate, customArguments))
             {
                 // ffmpeg failed to launch
                 return false;
@@ -342,7 +345,8 @@ namespace TiltBrush
                                    string outputFile,
                                    int width,
                                    int height,
-                                   float sampleRate)
+                                   float sampleRate,
+                                   string customArguments = null)
         {
             string streamInput = @"-y -r {4} -f rawvideo -codec rawvideo -s {0}x{1} " +
                 @"-pixel_format rgba -i {2} ";
@@ -368,6 +372,10 @@ namespace TiltBrush
                 streamOutput = @"-an -f rawvideo -pix_fmt rgba ""{3}""";
                 isReading = true;
             }
+            if (customArguments != null)
+            {
+                isReading = !inputFile.StartsWith("pipe:");
+            }
 
 
             string ffmpegExe = GetFfmpegExe();
@@ -379,8 +387,8 @@ namespace TiltBrush
             m_encoderProc = new Process();
 
             m_encoderProc.StartInfo.FileName = Path.GetFullPath(ffmpegExe);
-            m_encoderProc.StartInfo.Arguments = System.String.Format(streamInput + outputArgs + streamOutput,
-                width, height, inputFile, outputFile, sampleRate);
+            m_encoderProc.StartInfo.Arguments = customArguments ?? System.String.Format(
+                streamInput + outputArgs + streamOutput, width, height, inputFile, outputFile, sampleRate);
 
             m_encoderProc.StartInfo.CreateNoWindow = true;
             m_encoderProc.StartInfo.UseShellExecute = false;
@@ -524,6 +532,11 @@ namespace TiltBrush
                 // Assumption here is that it shouldn't take longer than five seconds to encode a single
                 // frame. If it takes longer we'll just start using up the buffer.
                 m_frameWritten.WaitOne(5 * 1000);
+                // Mark this frame unwritten before handing it over. Leaving that to the writer
+                // thread (it resets on waking) let a second call slip through before it woke and
+                // overwrite this frame, silently dropping it: 2 of 3,600 frames were lost that way
+                // in a post-production export (2026-10-24).
+                m_frameWritten.Reset();
             }
             Interlocked.Exchange(ref m_frame, buffer);
             m_frameReady.Set();
@@ -627,7 +640,13 @@ namespace TiltBrush
                         }
 
                         curFrame.ToBytes(ref buf);
-                        dataPipe.Write(buf);
+                        // In pieces: a single pipe write of a whole 4K frame (35MB) can fail
+                        // on Windows with error 1450, "insufficient system resources", which
+                        // killed a post-production export at frame 3 (2026-10-24).
+                        for (int offset = 0; offset < buf.Length; offset += kPipeWriteChunk)
+                        {
+                            dataPipe.Write(buf, offset, System.Math.Min(kPipeWriteChunk, buf.Length - offset));
+                        }
 
                         if (ReleaseFrame != null)
                         {
@@ -658,10 +677,19 @@ namespace TiltBrush
             }
             catch (System.Exception e)
             {
+                FailureMessage = $"{e.GetType().Name}: {e.Message}";
                 UnityEngine.Debug.LogWarning(m_outputFile);
                 UnityEngine.Debug.LogException(e);
             }
         }
+
+        private const int kPipeWriteChunk = 1 << 20;
+
+        // Set when the writer thread died on an error (e.g. ffmpeg exited or the pipe broke):
+        // frames queued after that go nowhere, so callers should stop rather than keep queuing.
+        public volatile string FailureMessage;
+        public bool HasFailed => FailureMessage != null ||
+            (m_encoderProc != null && m_encoderProc.HasExited && !m_shouldExit);
 
         private void ReadFramesFromFfmpeg()
         {
@@ -669,8 +697,11 @@ namespace TiltBrush
             // TODO: Use ffprobe instead of width/height, then w/h properties could be removed.
             byte[] buf = new byte[Height * Width * PIXEL_SIZE_BYTES];
             System.IO.BinaryReader dataPipe = m_dataReader;
-            // Keep a local set of buffers to avoid garbage collection.
-            Bytable[] localRefs = new Bytable[m_framesOut.Capacity];
+            // Keep a local set of buffers to avoid garbage collection. Two more than the ring
+            // holds, so the frame a consumer has just dequeued (and may still be copying) isn't
+            // overwritten by the next one read: with exactly Capacity buffers, dequeuing from a
+            // full ring frees the oldest slot and the very next read refills that same buffer.
+            Bytable[] localRefs = new Bytable[m_framesOut.Capacity + 2];
 
             // Init local refs.
             int lastLocalRef = 0;

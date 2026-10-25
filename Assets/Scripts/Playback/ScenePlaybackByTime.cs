@@ -155,9 +155,8 @@ namespace TiltBrush
 
         protected override bool IsControlPointReady(PointerManager.ControlPoint controlPoint)
         {
-            long currentTimeMs = (long)(App.Instance.CurrentSketchTime * 1000);
             return m_timeline.GetControlPointTimeMs(
-                m_stroke, controlPoint.m_TimestampMs) <= currentTimeMs;
+                m_stroke, controlPoint.m_TimestampMs) <= ScenePlaybackByTimeLayered.CurrentSketchTimeMs();
         }
     }
 
@@ -243,11 +242,21 @@ namespace TiltBrush
             return result;
         }
 
+        // The sketch time in milliseconds. Quick loads and ClearMemory set the sketch time to
+        // float.MaxValue to finish playback, which is outside long's range in milliseconds, so
+        // it is clamped to the end rather than cast (the cast overflowed, which stopped a quick
+        // load finishing a part-drawn stroke and made ClearMemory rewind instead).
+        internal static long CurrentSketchTimeMs()
+        {
+            double ms = App.Instance.CurrentSketchTime * 1000.0;
+            return ms >= long.MaxValue ? long.MaxValue : (long)ms;
+        }
+
         private bool UpdateInternal()
         {
             long currentTimeMs = m_quickLoadRemaining
                 ? long.MaxValue
-                : (long)(App.Instance.CurrentSketchTime * 1000);
+                : CurrentSketchTimeMs();
 
             // Handle a jump back in time by resetting corresponding in-flight or completed strokes
             // to the undrawn state.

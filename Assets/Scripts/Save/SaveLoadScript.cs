@@ -750,6 +750,7 @@ namespace TiltBrush
                     PostProductionSettings.GlobalTimeOffsetMs = ppMetadata?.TimeOffsetMs ?? 0;
                     PostProductionSettings.CropStartFrame = ppMetadata?.CropStartFrame;
                     PostProductionSettings.CropEndFrame = ppMetadata?.CropEndFrame;
+                    PostProductionSettings.DepthNearest = ppMetadata?.DepthFilter != "bilinear";
                     PostProductionClip.Clear();
                     PostProductionSettings.SourceFps = PostProductionSettings.DefaultSourceFps;
                     if (!string.IsNullOrEmpty(ppMetadata?.ClipDir))
@@ -796,6 +797,11 @@ namespace TiltBrush
                             new Vector3(cp[0], cp[1], cp[2]),
                             new Quaternion(cp[3], cp[4], cp[5], cp[6]));
                     }
+                    // After the camera name above: a sketch with a clip opens straight into the
+                    // preview (2026-10-24).
+                    if (PostProductionClip.IsLoaded)
+                    {
+                        PostProductionPreviewController.StartPreviewForClip();                    }
                 }
 
                 SketchControlsScript.m_Instance.SketchPlaybackMode =

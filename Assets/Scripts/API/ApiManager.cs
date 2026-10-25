@@ -889,6 +889,10 @@ Success. If you are not automatically redirected, please visit <a href='{success
                     return PostProductionClip.ClipDir;
                 case "query.postprod.clip.fps":
                     return PostProductionSettings.SourceFps.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                case "query.postprod.preview.settings":
+                    return PostProductionPreviewController.SettingsReadout();
+                case "query.postprod.export.status":
+                    return PostProductionExport.Status();
                 case "query.postprod.sketch.name":
                     return PostProductionSettings.LoadedSketchName;
                 case "query.postprod.list.sketches":
@@ -897,6 +901,8 @@ Success. If you are not automatically redirected, please visit <a href='{success
                     return PostProductionClip.ListClips();
                 case "query.postprod.layers.visible":
                     return PostProductionPreviewController.LayerVisibility;
+                case "query.postprod.layers.names":
+                    return PostProductionPreviewController.LayerNames;
             }
             return "unknown query";
         }

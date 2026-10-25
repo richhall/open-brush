@@ -697,6 +697,11 @@ namespace TiltBrush
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public int[] VisibleLayers { get; set; }
 
+        // How plate depth is sampled: "bilinear", or null for the default, nearest texel.
+        // Added 2026-10-25.
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string DepthFilter { get; set; }
+
         [JsonIgnore]
         public bool IsDefault =>
             SpatialOffset == TrTransform.identity && TimeOffsetMs == 0 &&
@@ -704,7 +709,7 @@ namespace TiltBrush
             CameraIntrinsics == null && CameraClip == null &&
             string.IsNullOrEmpty(CameraName) && CameraPose == null &&
             LensCalibration == null && LensUndistort == null &&
-            string.IsNullOrEmpty(ClipDir) && VisibleLayers == null;
+            string.IsNullOrEmpty(ClipDir) && VisibleLayers == null && DepthFilter == null;
     }
 
     // TODO: deprecate (7.5b-only)

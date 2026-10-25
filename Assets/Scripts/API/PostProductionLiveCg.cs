@@ -28,7 +28,8 @@ namespace TiltBrush
     // instead of on the CPU).
     public static class PostProductionLiveCg
     {
-        public static bool Enabled { get; set; }
+        // On by default: the snapshot path it replaced is no longer offered in the preview.
+        public static bool Enabled { get; set; } = true;
 
         // Off by default: the snapshot colour pass has bloom (its post-effects toggle only
         // covers the depth pass), but a flatter image is clearer for judging alignment.
@@ -57,6 +58,29 @@ namespace TiltBrush
         private static Camera s_DepthCamera;
         private static Shader s_DepthNormalsShader;
         private static readonly Color kNoDepthBackground = new Color(0.5f, 0.5f, 1.0f, 0.0f);
+
+        // Editor Play sessions keep static state (no domain reload). The previous session's
+        // cameras were destroyed with its scene; its render textures are released here.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            Enabled = true;
+            Bloom = false;
+            Width = 1280;
+            Height = 676;
+            s_MatchDisplay = true;
+            if (ColorRT != null) { ColorRT.Release(); }
+            if (EncodedDepthRT != null) { EncodedDepthRT.Release(); }
+            ColorRT = null;
+            EncodedDepthRT = null;
+            FarClipMetres = 0;
+            HasFrame = false;
+            LastStatus = "live CG off";
+            LastDumpStatus = "no dump yet";
+            s_ColorCamera = null;
+            s_DepthCamera = null;
+            s_DepthNormalsShader = null;
+        }
 
         // width or height <= 0 returns to matching the display.
         public static void SetResolution(int width, int height)
@@ -89,41 +113,9 @@ namespace TiltBrush
             }
             EnsureTargets();
 
-            // Two cameras so the colour camera can carry the bloom effect without it ever
-            // touching depth (toggling the effect per pass would rebuild its material every
-            // frame, since it creates it in OnEnable and destroys it in OnDisable).
-            Camera colorCam = GetCamera(ref s_ColorCamera, "PostProdLiveCgColorCamera");
-            Camera depthCam = GetCamera(ref s_DepthCamera, "PostProdLiveCgDepthCamera");
-            SetupCamera(colorCam, template, targetCamera, hasTargetPose, targetPosition, targetRotation);
-            SetupCamera(depthCam, template, targetCamera, hasTargetPose, targetPosition, targetRotation);
-            FarClipMetres = depthCam.farClipPlane * App.UNITS_TO_METERS;
-
-            // Per-layer spatial offsets apply only while these two renders run.
-            using var layerOffsets = new PostProductionLayerOffsetScope();
-
-            var bloom = SyncBloom(colorCam, template);
-            colorCam.targetTexture = ColorRT;
-            // MSAA only applies to forward rendering, and an HDR intermediate may not be
-            // multisampled; 4x AA was measured as having no effect with the copied settings
-            // (2026-10-20), so pin both. ScreenshotManager.Start sets allowHDR = false on
-            // the snapshot camera anyway.
-            colorCam.renderingPath = RenderingPath.Forward;
-            colorCam.allowHDR = false;
-            colorCam.allowMSAA = true;
-            ApplyProjection(colorCam);
-            colorCam.Render();
-            colorCam.targetTexture = null;
-
-            // Depth must not be multisampled: averaging encoded depth corrupts it.
-            depthCam.allowMSAA = false;
-            depthCam.targetTexture = EncodedDepthRT;
-            depthCam.depthTextureMode = DepthTextureMode.Depth;
-            depthCam.clearFlags = CameraClearFlags.SolidColor;
-            depthCam.backgroundColor = kNoDepthBackground;
-            ApplyProjection(depthCam);
-            depthCam.RenderWithShader(GetDepthNormalsShader(), "RenderType");
-            depthCam.targetTexture = null;
-
+            var bloom = RenderTo(ColorRT, EncodedDepthRT, PostProductionLens.Active, template, targetCamera,
+                hasTargetPose, targetPosition, targetRotation, out var colorCam, out float farMetres);
+            FarClipMetres = farMetres;
             HasFrame = true;
             string bloomState = !Bloom ? "off" : bloom != null ? "on" : "unavailable (no bloom on snapshot camera)";
             LastStatus = $"live CG {Width}x{Height} ({(s_MatchDisplay ? "matching display" : "fixed")}), bloom {bloomState}: " +
@@ -132,6 +124,62 @@ namespace TiltBrush
                 $"allowMSAA={colorCam.allowMSAA} rtAA={ColorRT.antiAliasing} " +
                 $"qualityAA={QualitySettings.antiAliasing} template path={template.renderingPath}/" +
                 $"{template.actualRenderingPath} template hdr={template.allowHDR}";
+        }
+
+        // The export's render (PostProductionExport): the same CG as the preview, into the
+        // caller's targets at their own size, always in the undistorted working frame when
+        // workingFrame is set (the export distorts it back into the original lens itself).
+        // Returns false if the snapshot rig camera isn't available.
+        public static bool RenderForExport(RenderTexture color, RenderTexture encodedDepth, bool workingFrame,
+            Vector3 targetPosition, Quaternion targetRotation, out float farClipMetres)
+        {
+            farClipMetres = 0f;
+            Camera template = GetSnapshotCamera();
+            if (template == null) { return false; }
+            RenderTo(color, encodedDepth, workingFrame, template, template, true, targetPosition, targetRotation,
+                out _, out farClipMetres);
+            return true;
+        }
+
+        private static SENaturalBloomAndDirtyLens RenderTo(RenderTexture color, RenderTexture encodedDepth,
+            bool workingFrame, Camera template, Camera targetCamera, bool hasTargetPose, Vector3 targetPosition,
+            Quaternion targetRotation, out Camera colorCam, out float farClipMetres)
+        {
+            // Two cameras so the colour camera can carry the bloom effect without it ever
+            // touching depth (toggling the effect per pass would rebuild its material every
+            // frame, since it creates it in OnEnable and destroys it in OnDisable).
+            colorCam = GetCamera(ref s_ColorCamera, "PostProdLiveCgColorCamera");
+            Camera depthCam = GetCamera(ref s_DepthCamera, "PostProdLiveCgDepthCamera");
+            SetupCamera(colorCam, template, targetCamera, hasTargetPose, targetPosition, targetRotation);
+            SetupCamera(depthCam, template, targetCamera, hasTargetPose, targetPosition, targetRotation);
+            farClipMetres = depthCam.farClipPlane * App.UNITS_TO_METERS;
+
+            // Per-layer spatial offsets apply only while these two renders run.
+            using var layerOffsets = new PostProductionLayerOffsetScope();
+
+            var bloom = SyncBloom(colorCam, template);
+            colorCam.targetTexture = color;
+            // MSAA only applies to forward rendering, and an HDR intermediate may not be
+            // multisampled; 4x AA was measured as having no effect with the copied settings
+            // (2026-10-20), so pin both. ScreenshotManager.Start sets allowHDR = false on
+            // the snapshot camera anyway.
+            colorCam.renderingPath = RenderingPath.Forward;
+            colorCam.allowHDR = false;
+            colorCam.allowMSAA = true;
+            ApplyProjection(colorCam, color.width, color.height, workingFrame);
+            colorCam.Render();
+            colorCam.targetTexture = null;
+
+            // Depth must not be multisampled: averaging encoded depth corrupts it.
+            depthCam.allowMSAA = false;
+            depthCam.targetTexture = encodedDepth;
+            depthCam.depthTextureMode = DepthTextureMode.Depth;
+            depthCam.clearFlags = CameraClearFlags.SolidColor;
+            depthCam.backgroundColor = kNoDepthBackground;
+            ApplyProjection(depthCam, encodedDepth.width, encodedDepth.height, workingFrame);
+            depthCam.RenderWithShader(GetDepthNormalsShader(), "RenderType");
+            depthCam.targetTexture = null;
+            return bloom;
         }
 
         // Keeps a copy of the snapshot camera's bloom effect on the live camera, enabled
@@ -206,24 +254,23 @@ namespace TiltBrush
 
         // Intrinsics are stored against the resolution they were calibrated at; rescaled to
         // the render size exactly as TakeSnapshot does.
-        private static void ApplyProjection(Camera cam)
+        private static void ApplyProjection(Camera cam, int width, int height, bool work)
         {
             if (!ScreenshotManager.UseCalibratedProjection) { return; }
-            // Undistorted preview: render the overscanned working frame (same focal length,
-            // larger frame, shifted principal point), so the composite covers every pixel
-            // of the real frame once undistorted.
-            bool work = PostProductionLens.Active;
+            // Undistorted: render the overscanned working frame (same focal length, larger
+            // frame, shifted principal point), so the composite covers every pixel of the
+            // real frame once undistorted.
             float refW = work ? PostProductionLens.WorkWidth : ScreenshotManager.CalibratedRefWidth;
             float refH = work ? PostProductionLens.WorkHeight : ScreenshotManager.CalibratedRefHeight;
-            float sx = Width / refW;
-            float sy = Height / refH;
+            float sx = width / refW;
+            float sy = height / refH;
             float fx = (work ? PostProductionLens.WorkFx : ScreenshotManager.CalibratedFx) * sx;
             float fy = (work ? PostProductionLens.WorkFy : ScreenshotManager.CalibratedFy) * sy;
             float cx = (work ? PostProductionLens.WorkCx : ScreenshotManager.CalibratedCx) * sx;
             float cy = (work ? PostProductionLens.WorkCy : ScreenshotManager.CalibratedCy) * sy;
-            cam.fieldOfView = 2f * Mathf.Atan(Height / (2f * fy)) * Mathf.Rad2Deg;
+            cam.fieldOfView = 2f * Mathf.Atan(height / (2f * fy)) * Mathf.Rad2Deg;
             cam.projectionMatrix = ScreenshotManager.BuildProjectionFromIntrinsics(
-                fx, fy, cx, cy, Width, Height, cam.nearClipPlane, cam.farClipPlane);
+                fx, fy, cx, cy, width, height, cam.nearClipPlane, cam.farClipPlane);
         }
 
         // Parity test (design doc section 10, step 3): writes the current live frame as a

@@ -27,8 +27,8 @@ namespace TiltBrush
     //   the clip manifest's plates.preview, preview_1280x676 for C006).
     //   Compressed bytes read on a worker thread; decoded on the main thread on demand
     //   (Texture2D.LoadImage is main-thread only).
-    // - Depth: <clipDir>/depth_frames/frame_NNNNN_depth.exr (already 1280x676), every
-    //   2nd frame. Read and decoded to floats entirely on the worker thread
+    // - Depth: the clip's preview depth set, <clipDir>/<plates.depth>/frame_NNNNN_depth.exr
+    //   (depth_frames for C006: 1280x676, every 2nd frame). Read and decoded to floats entirely on the worker thread
     //   (ExrDepthReader is pure C#); only the upload happens on the main thread.
     //
     // A frame that isn't ready yet is never silently replaced: the previous frame is held
@@ -38,6 +38,10 @@ namespace TiltBrush
         public enum PlateState { Ready, Holding, Loading, OutOfRange }
 
         public static bool Enabled { get; private set; }
+
+        // The first frame with both preview colour and depth, or null when fast plates are off.
+        public static int? FirstCompositableFrame =>
+            Enabled ? Mathf.Max(s_ColorFirst, s_DepthFirst) : (int?)null;
         public static volatile string LastStatus = "fast plates off";
 
         // Windows around the playhead, in C006 frames (60fps). Ahead-biased for playback.
@@ -114,6 +118,48 @@ namespace TiltBrush
         private static readonly Dictionary<int, Texture2D> s_DepthTex = new Dictionary<int, Texture2D>();
         private static int s_ShownColorFrame = int.MinValue, s_ShownDepthFrame = int.MinValue;
 
+        // Editor Play sessions keep static state (no domain reload), including the loader
+        // thread, which would otherwise keep running into the next session: stop it and start
+        // with fast plates off, as a build does.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            Interlocked.Increment(ref s_Generation);
+            Enabled = false;
+            s_StopWorker = true;
+            s_Wake.Set();
+            if (s_Worker != null && s_Worker.IsAlive) { s_Worker.Join(500); }
+            s_Worker = null;
+            s_StopWorker = false;
+            lock (s_Lock)
+            {
+                s_ColorBytes.Clear();
+                s_DepthPixels.Clear();
+                s_DepthPool.Clear();
+                s_DepthInFlight.Clear();
+                s_ColorInFlight.Clear();
+            }
+            // Not scene objects, so they outlive the previous session unless destroyed.
+            foreach (var t in s_ColorTex.Values) { if (t != null) { UnityEngine.Object.DestroyImmediate(t); } }
+            foreach (var t in s_DepthTex.Values) { if (t != null) { UnityEngine.Object.DestroyImmediate(t); } }
+            s_ColorTex.Clear();
+            s_DepthTex.Clear();
+            s_ShownColorFrame = s_ShownDepthFrame = int.MinValue;
+            s_Playhead = int.MinValue;
+            s_PrevPassPlayhead = int.MinValue;
+            s_ColorDir = s_DepthDir = null;
+            s_ColorFirst = s_ColorLast = 0;
+            s_DepthFirst = s_DepthLast = s_DepthStride = 0;
+            s_DepthWidth = s_DepthHeight = 0;
+            s_DepthDecoders = DefaultDepthDecoders;
+            s_DecodeCount = s_DecodeTicks = 0;
+            s_LastDecodeDoneTicks = 0;
+            s_MaxMainThreadMs = 0;
+            s_WorkerPhase = "idle";
+            s_PooledDecodeCheck = "not run";
+            LastStatus = "fast plates off";
+        }
+
         [Serializable]
         private class PreviewManifest { public PreviewRange color; }
         [Serializable]
@@ -139,10 +185,10 @@ namespace TiltBrush
                 var preview = JsonUtility.FromJson<PreviewManifest>(
                     File.ReadAllText(Path.Combine(previewDir, "manifest.json")));
                 var depth = JsonUtility.FromJson<DepthManifest>(
-                    File.ReadAllText(Path.Combine(clipDir, "depth_frames", "manifest.json")));
+                    File.ReadAllText(Path.Combine(clipDir, PostProductionClip.PreviewDepthDir, "manifest.json")));
                 Disable();
                 s_ColorDir = Path.Combine(previewDir, "color");
-                s_DepthDir = Path.Combine(clipDir, "depth_frames");
+                s_DepthDir = Path.Combine(clipDir, PostProductionClip.PreviewDepthDir);
                 s_ColorFirst = preview.color.firstFrame;
                 s_ColorLast = preview.color.lastFrame;
                 s_DepthFirst = depth.firstFrame;
@@ -279,8 +325,8 @@ namespace TiltBrush
         {
             Texture2D tex;
             lock (s_Lock) { if (!s_DepthPixels.ContainsKey(depthFrame)) { return null; } }
-            // Bilinear, matching the existing plate-depth path (and cv2.resize INTER_LINEAR
-            // in the Python reference).
+            // Bilinear, so the compositor can sample either way: it snaps to the nearest
+            // texel unless the depth filter is bilinear.
             tex = new Texture2D(s_DepthWidth, s_DepthHeight, TextureFormat.RFloat, false, true)
             {
                 filterMode = FilterMode.Bilinear,

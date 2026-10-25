@@ -53,6 +53,21 @@ namespace TiltBrush
 
         public static volatile string LastStatus = "no lens calibration set";
 
+        // Editor Play sessions keep static state (no domain reload); start with no calibration.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState() => Clear();
+
+        public static void Clear()
+        {
+            Undistort = false;
+            HasCalibration = false;
+            SrcFx = SrcFy = SrcCx = SrcCy = 0;
+            K1 = K2 = P1 = P2 = K3 = 0;
+            WorkFx = WorkFy = WorkCx = WorkCy = 0;
+            WorkWidth = WorkHeight = 0;
+            LastStatus = "no lens calibration set";
+        }
+
         // True when the preview should run in the undistorted working frame.
         public static bool Active =>
             Undistort && HasCalibration && ScreenshotManager.UseCalibratedProjection;
@@ -136,11 +151,14 @@ namespace TiltBrush
             }
         }
 
-        // Sets the shader uniforms PostProdComposite.shader uses to undistort the plate.
-        public static void SetShaderParams(Material mat, bool active)
+        // Sets the shader uniforms PostProdComposite.shader uses to undistort the plate
+        // (preview), or to distort the CG into the original lens (export). Both are always
+        // written: the material is shared by the preview and the export.
+        public static void SetShaderParams(Material mat, bool active, bool distortCg = false)
         {
-            mat.SetFloat("_UndistortPlate", active ? 1f : 0f);
-            if (!active) { return; }
+            mat.SetFloat("_UndistortPlate", active && !distortCg ? 1f : 0f);
+            mat.SetFloat("_DistortCG", distortCg ? 1f : 0f);
+            if (!active && !distortCg) { return; }
             mat.SetVector("_WorkK", new Vector4(WorkFx, WorkFy, WorkCx, WorkCy));
             mat.SetVector("_WorkSize", new Vector4(WorkWidth, WorkHeight, 0, 0));
             mat.SetVector("_SrcK", new Vector4(SrcFx, SrcFy, SrcCx, SrcCy));

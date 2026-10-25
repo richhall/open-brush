@@ -850,6 +850,7 @@ namespace TiltBrush
         )]
         public static void ShowLayer(int layer)
         {
+            PostProductionExport.ThrowIfExporting("layer.show");
             App.Scene.ShowLayer(layer);
         }
 
@@ -860,6 +861,7 @@ namespace TiltBrush
         )]
         public static void HideLayer(int layer)
         {
+            PostProductionExport.ThrowIfExporting("layer.hide");
             App.Scene.HideLayer(layer);
         }
 
@@ -870,6 +872,7 @@ namespace TiltBrush
         )]
         public static void ToggleLayer(int layer)
         {
+            PostProductionExport.ThrowIfExporting("layer.toggle");
             App.Scene.ToggleLayerVisibility(layer);
         }
 
@@ -1499,6 +1502,7 @@ namespace TiltBrush
         )]
         public static void SetCameraIntrinsics(float fx, float fy, float cx, float cy, float refWidth, float refHeight)
         {
+            PostProductionExport.ThrowIfExporting("camera.intrinsics");
             if (fx <= 0 || fy <= 0 || refWidth <= 0 || refHeight <= 0)
             {
                 throw new System.ArgumentException(
@@ -1529,6 +1533,7 @@ namespace TiltBrush
         )]
         public static void SetCameraClip(float near, float far)
         {
+            PostProductionExport.ThrowIfExporting("camera.clip");
             if (near <= 0 || far <= near)
             {
                 throw new System.ArgumentException(

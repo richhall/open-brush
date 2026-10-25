@@ -42,6 +42,16 @@ namespace TiltBrush
         private static readonly Dictionary<CanvasScript, Vector3> s_LayerCentreCanvas =
             new Dictionary<CanvasScript, Vector3>();
 
+        // Editor Play sessions keep static state (no domain reload).
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            lock (s_ReadoutLock) { s_Readouts.Clear(); }
+            s_CentreStrokeCount = -1;
+            s_AllCentreScene = Vector3.zero;
+            s_LayerCentreCanvas.Clear();
+        }
+
         public static void Nudge(int target, float forwardMetres, float rightMetres, float yawDegrees)
         {
             if (!TryGetFrame(target, out TrTransform frame, out Vector3 centre)) { return; }
@@ -105,7 +115,9 @@ namespace TiltBrush
             moved.y = 0f;
             Vector3 turned = (frame * offset * frame.inverse).rotation * Vector3.forward;
             float yaw = Mathf.Atan2(turned.x, turned.z) * Mathf.Rad2Deg;
-            return $"forward {Vector3.Dot(moved, forward) * App.UNITS_TO_METERS:F3}m, " +
+            // "back" = away from the camera, matching the page's buttons (the nudge itself is
+            // along the camera's view direction, so the value is unchanged).
+            return $"back {Vector3.Dot(moved, forward) * App.UNITS_TO_METERS:F3}m, " +
                 $"right {Vector3.Dot(moved, right) * App.UNITS_TO_METERS:F3}m, yaw {yaw:F2} deg";
         }
 

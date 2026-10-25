@@ -41,14 +41,27 @@ namespace TiltBrush
         // for callers that want a best-effort fallback rather than nothing).
         public static bool TryResolve(string depthFramesDir, int requestedFrame, out int resolvedFrame)
         {
+            ReadRange(depthFramesDir, out int first, out int last, out int stride);
+            return Snap(requestedFrame, first, last, stride, out resolvedFrame);
+        }
+
+        // For callers resolving many frames (the export): read the manifest once, then Snap.
+        public static void ReadRange(string depthFramesDir, out int firstFrame, out int lastFrame, out int stride)
+        {
             string manifestPath = Path.Combine(depthFramesDir, "manifest.json");
             var manifest = JsonUtility.FromJson<Manifest>(File.ReadAllText(manifestPath));
+            firstFrame = manifest.firstFrame;
+            lastFrame = manifest.lastFrame;
+            stride = Mathf.Max(1, manifest.stride);
+        }
 
-            bool inRange = requestedFrame >= manifest.firstFrame && requestedFrame <= manifest.lastFrame;
-            int clamped = Mathf.Clamp(requestedFrame, manifest.firstFrame, manifest.lastFrame);
-            int offset = clamped - manifest.firstFrame;
-            int snappedOffset = Mathf.RoundToInt(offset / (float)manifest.stride) * manifest.stride;
-            resolvedFrame = manifest.firstFrame + snappedOffset;
+        public static bool Snap(int requestedFrame, int firstFrame, int lastFrame, int stride, out int resolvedFrame)
+        {
+            bool inRange = requestedFrame >= firstFrame && requestedFrame <= lastFrame;
+            int clamped = Mathf.Clamp(requestedFrame, firstFrame, lastFrame);
+            int offset = clamped - firstFrame;
+            int snappedOffset = Mathf.RoundToInt(offset / (float)stride) * stride;
+            resolvedFrame = firstFrame + snappedOffset;
             return inRange;
         }
 

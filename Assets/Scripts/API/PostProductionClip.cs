@@ -27,17 +27,38 @@ namespace TiltBrush
     {
         public const string ManifestName = "clip.json";
         public const string DefaultPreviewDir = "preview_1280x676";
+        public const string DefaultDepthDir = "depth_frames";
 
         [Serializable]
         private class Manifest
         {
             public string clip;
-            public Source source;
+            public SourceInfo source;
             public CameraSetup camera;
             public Plates plates;
         }
+        // Everything about the source the export matches (2026-10-24): written by
+        // make_clip_manifest.py from ffprobe. Older manifests lack all but the first four.
         [Serializable]
-        private class Source { public int width; public int height; public float fps; }
+        public class SourceInfo
+        {
+            public string video;
+            public int width;
+            public int height;
+            public float fps;
+            public string codec = "";
+            public string profile = "";
+            public string pixFmt = "";
+            public int bitDepth;
+            public string colorSpace = "";
+            public string colorTransfer = "";
+            public string colorPrimaries = "";
+            public string colorRange = "";
+            public string timecode = "";
+            public AudioInfo audio;
+        }
+        [Serializable]
+        public class AudioInfo { public string codec = ""; public int sampleRate; public int channels; }
         [Serializable]
         private class CameraSetup
         {
@@ -48,7 +69,17 @@ namespace TiltBrush
             public float[] rotation;   // x, y, z, w
         }
         [Serializable]
-        private class Plates { public string preview; }
+        private class Plates
+        {
+            public string preview;
+            // The depth set the preview uses, light enough to scrub (e.g. 1280x676, every 2nd
+            // frame), and the export's fallback.
+            public string depth;
+            // Optional: a heavier depth set for the export only (e.g. full resolution, every
+            // frame). Any depth set: metres, 0 = no depth, the raw (distorted) camera frame at
+            // the source aspect ratio, true source frame numbers, its own manifest.json.
+            public string depthExport;
+        }
 
         // Clips live in Open Brush's Media Library under PostProd/ (each one can be a
         // junction to wherever the media really is). A clip dir relative to the Media
@@ -98,7 +129,17 @@ namespace TiltBrush
         public static string ClipDir { get; private set; } = "";
         public static bool IsLoaded => !string.IsNullOrEmpty(ClipDir);
         public static string ClipName { get; private set; } = "";
+        // Absolute clip folder, and the full-quality source video the export decodes.
+        public static string FullDir { get; private set; } = "";
+        public static string SourceVideo { get; private set; } = "";
+        public static int SourceWidth { get; private set; }
+        public static int SourceHeight { get; private set; }
+        // The full source description, for the export's "Match source"; null if no clip.
+        public static SourceInfo Source { get; private set; }
         public static string PreviewDir { get; private set; } = DefaultPreviewDir;
+        // Depth set folders, relative to the clip folder (see Plates).
+        public static string PreviewDepthDir { get; private set; } = DefaultDepthDir;
+        public static string ExportDepthDir { get; private set; } = "";
         public static volatile string LastStatus = "no clip loaded";
 
         // Returns null on success, otherwise the error (also in LastStatus).
@@ -138,8 +179,15 @@ namespace TiltBrush
             PostProductionSettings.SourceFps = m.source.fps;
 
             ClipDir = clipDir;
+            FullDir = fullDir;
+            SourceVideo = m.source.video ?? "";
+            SourceWidth = m.source.width;
+            SourceHeight = m.source.height;
+            Source = m.source;
             ClipName = string.IsNullOrEmpty(m.clip) ? Path.GetFileName(clipDir) : m.clip;
             PreviewDir = string.IsNullOrEmpty(m.plates?.preview) ? DefaultPreviewDir : m.plates.preview;
+            PreviewDepthDir = string.IsNullOrEmpty(m.plates?.depth) ? DefaultDepthDir : m.plates.depth;
+            ExportDepthDir = m.plates?.depthExport ?? "";
             PostProductionPreviewController.SetAutoPlateClipDir(fullDir);
             if (PostProductionPlateCache.Enabled)
             {
@@ -148,15 +196,26 @@ namespace TiltBrush
             }
 
             LastStatus = $"clip {ClipName} loaded from {clipDir}: {m.source.width}x{m.source.height} " +
-                $"@ {m.source.fps}fps, preview {PreviewDir}";
+                $"@ {m.source.fps}fps, preview {PreviewDir}, depth {PreviewDepthDir}" +
+                (ExportDepthDir != "" ? $", export depth {ExportDepthDir}" : "");
             return null;
         }
+
+        // Editor Play sessions keep static state (no domain reload); start each one with no clip.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState() => Clear();
 
         public static void Clear()
         {
             ClipDir = "";
+            FullDir = "";
+            SourceVideo = "";
+            SourceWidth = SourceHeight = 0;
+            Source = null;
             ClipName = "";
             PreviewDir = DefaultPreviewDir;
+            PreviewDepthDir = DefaultDepthDir;
+            ExportDepthDir = "";
             LastStatus = "no clip loaded";
         }
     }

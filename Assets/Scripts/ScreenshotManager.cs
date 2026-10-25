@@ -999,6 +999,22 @@ namespace TiltBrush
         /// that cost a rebuild to diagnose. Null until the first capture.
         public static volatile string s_LastCaptureExtrinsicsJson = "null";
 
+        // Editor Play sessions keep static state (no domain reload); start uncalibrated.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetCalibratedCameraState() => ClearCalibratedCamera();
+
+        // Back to Open Brush's own camera projection and clipping (the post-production clip set
+        // these; New Sketch ends that session).
+        public static void ClearCalibratedCamera()
+        {
+            s_UseCalibratedProjection = false;
+            s_Fx = s_Fy = s_Cx = s_Cy = s_RefWidth = s_RefHeight = 0;
+            s_UseCalibratedClip = false;
+            s_NearClip = s_FarClip = 0;
+            s_ProjectionReportJson = "{\"calibrated\":false}";
+            s_LastCaptureExtrinsicsJson = "null";
+        }
+
         public static void SetCalibratedIntrinsics(
             float fx, float fy, float cx, float cy, float refWidth, float refHeight)
         {

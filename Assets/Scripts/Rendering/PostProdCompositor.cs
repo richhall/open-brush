@@ -97,7 +97,7 @@ namespace TiltBrush
             Texture cgColor, Texture cgDepth, Texture plateColor, Texture plateDepth,
             bool naiveMode, bool debugMode = false,
             bool cgDepthEncoded = false, float cgFarClipMetres = 0f,
-            bool undistortPlate = false)
+            bool undistortPlate = false, bool distortCg = false)
         {
             var mat = GetMaterial();
             mat.SetTexture("_CGColorTex", cgColor);
@@ -105,10 +105,11 @@ namespace TiltBrush
             mat.SetTexture("_PlateColorTex", plateColor);
             mat.SetTexture("_PlateDepthTex", plateDepth);
             mat.SetFloat("_NaiveMode", naiveMode ? 1f : 0f);
+            mat.SetFloat("_DepthNearest", PostProductionSettings.DepthNearest ? 1f : 0f);
             mat.SetFloat("_DebugMode", debugMode ? 1f : 0f);
             mat.SetFloat("_CGDepthEncoded", cgDepthEncoded ? 1f : 0f);
             mat.SetFloat("_CGFarClipMetres", cgFarClipMetres);
-            PostProductionLens.SetShaderParams(mat, undistortPlate);
+            PostProductionLens.SetShaderParams(mat, undistortPlate, distortCg);
             Graphics.Blit(cgColor, destination, mat);
         }
 

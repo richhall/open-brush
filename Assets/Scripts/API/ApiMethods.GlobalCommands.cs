@@ -205,6 +205,7 @@ namespace TiltBrush
         )]
         public static void SetCurrentSketchTimeMs(int ms)
         {
+            PostProductionExport.ThrowIfExporting("sketch.currenttime");
             // Only IScenePlayback.Update() acts on CurrentSketchTime, and the playback object
             // is torn down once a sketch finishes loading - so without it this call would set a
             // value that nothing reads and appear to do nothing. Fail loudly instead.
@@ -246,6 +247,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdCropStartFrame(int frame)
         {
+            PostProductionExport.ThrowIfExporting("postprod.crop.start");
             PostProductionSettings.CropStartFrame = frame;
         }
 
@@ -256,6 +258,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdCropEndFrame(int frame)
         {
+            PostProductionExport.ThrowIfExporting("postprod.crop.end");
             PostProductionSettings.CropEndFrame = frame;
         }
 
@@ -266,6 +269,7 @@ namespace TiltBrush
         )]
         public static void ClearPostProdCrop()
         {
+            PostProductionExport.ThrowIfExporting("postprod.crop.clear");
             PostProductionSettings.CropStartFrame = null;
             PostProductionSettings.CropEndFrame = null;
         }
@@ -284,12 +288,7 @@ namespace TiltBrush
             // otherwise enabling this after loading would appear to work but still not seek.
             if (enable && !sketchMemory.IsPlayingBack && sketchMemory.GetMemoryList.Count > 0)
             {
-                foreach (var stroke in sketchMemory.GetMemoryList)
-                {
-                    sketchMemory.UnrenderStrokeMemoryObject(stroke);
-                }
-                sketchMemory.BeginDrawingFromMemory(
-                    bDrawFromStart: true, forEdit: true, playAudio: false);
+                sketchMemory.RestartScrubPlayback();
             }
         }
 
@@ -310,6 +309,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdGlobalTimeOffset(int ms)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.time.global");
             PostProductionSettings.GlobalTimeOffsetMs = ms;
         }
 
@@ -320,6 +320,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdLayerTimeOffset(int layer, int ms)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.time.layer");
             if (PostProductionSettings.GetLayerTimeOffsetMs(layer) == ms) { return; }
             PostProductionSettings.SetLayerTimeOffsetMs(layer, ms);
             SketchMemoryScript.m_Instance.RebuildPlaybackKeepingTime();
@@ -332,6 +333,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdGlobalSpatialOffset(Vector3 position, Vector3 rotation, float scale)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.global");
             PostProductionSettings.GlobalSpatialOffset =
                 TrTransform.TRS(position, Quaternion.Euler(rotation), scale);
         }
@@ -343,6 +345,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdGlobalSpatialOffsetQuat(Vector3 position, Quaternion rotation, float scale)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.global.quat");
             PostProductionSettings.GlobalSpatialOffset = TrTransform.TRS(position, rotation, scale);
         }
 
@@ -354,6 +357,7 @@ namespace TiltBrush
         public static void SetPostProdLayerSpatialOffset(
             int layer, Vector3 position, Vector3 rotation, float scale)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.layer");
             PostProductionSettings.SetLayerSpatialOffset(
                 layer, TrTransform.TRS(position, Quaternion.Euler(rotation), scale));
         }
@@ -366,6 +370,7 @@ namespace TiltBrush
         public static void SetPostProdLayerSpatialOffsetQuat(
             int layer, Vector3 position, Quaternion rotation, float scale)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.layer.quat");
             PostProductionSettings.SetLayerSpatialOffset(layer, TrTransform.TRS(position, rotation, scale));
         }
 
@@ -416,6 +421,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdPreviewPose(Vector3 position, Quaternion rotation)
         {
+            PostProductionExport.ThrowIfExporting("postprod.preview.pose");
             PostProductionPreviewController.SetTargetPose(position, rotation);
         }
 
@@ -456,7 +462,56 @@ namespace TiltBrush
         )]
         public static void LoadPostProdClip(string clipDir)
         {
-            PostProductionClip.Load(clipDir);
+            PostProductionExport.ThrowIfExporting("postprod.clip.load");
+            if (PostProductionClip.Load(clipDir) == null)
+            {
+                PostProductionPreviewController.StartPreviewForClip();
+            }
+        }
+
+        [ApiEndpoint(
+            "postprod.load",
+            "Loads a sketch from the user's Sketches folder for post-production: real-time playback, scrubbing on (sketch.scrub), and no load animation (a quick load). Once loaded, the playhead goes to the export range start, else the first frame of the clip that can be composited, else the start of the sketch. A sketch saved with a clip opens straight into the preview. The .tilt suffix is optional",
+            "Untitled_17"
+        )]
+        public static void LoadPostProdSketch(string filename)
+        {
+            PostProductionExport.ThrowIfExporting("postprod.load");
+            // Before the load, so the new playback is kept alive (no need to rebuild the old one).
+            SketchMemoryScript.m_Instance.m_KeepPlaybackAliveForScrubbing = true;
+            LoadNamedFile(filename, realTime: true, quickload: true);
+            PostProductionPreviewController.MovePlayheadAfterLoad();
+        }
+
+        [ApiEndpoint(
+            "postprod.export.start",
+            "Exports the depth-aware composite at full quality over the trim range (postprod.crop.start/end), matching the original lens: the plate is decoded from the clip's source video, the CG is rendered at full resolution and distorted back into the real lens. Written to <clipDir>/exports, with the source's audio for the same frames. format: source (match the source: its ProRes flavour, or ProRes 422 HQ if it isn't ProRes, with its colour, timecode and audio), prores422hq or h264. Progress, time remaining and errors in query.postprod.export.status",
+            "source"
+        )]
+        public static void StartPostProdExport(string format)
+        {
+            string error = PostProductionExport.Start(format);
+            if (error != null) { throw new System.InvalidOperationException("postprod.export.start: " + error); }
+        }
+
+        [ApiEndpoint(
+            "postprod.export.reveal",
+            "Shows the last finished post-production export selected in Explorer, or the clip's exports folder (Windows)",
+            ""
+        )]
+        public static void RevealPostProdExport()
+        {
+            PostProductionExport.Reveal();
+        }
+
+        [ApiEndpoint(
+            "postprod.export.cancel",
+            "Cancels a running post-production export and deletes the partial file",
+            ""
+        )]
+        public static void CancelPostProdExport()
+        {
+            PostProductionExport.Cancel();
         }
 
         [ApiEndpoint(
@@ -497,6 +552,7 @@ namespace TiltBrush
         )]
         public static void NudgePostProdSpatialOffset(int target, float forwardMetres, float rightMetres, float yawDegrees)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.nudge");
             PostProductionAlignment.Nudge(target, forwardMetres, rightMetres, yawDegrees);
         }
 
@@ -507,6 +563,7 @@ namespace TiltBrush
         )]
         public static void SetPostProdPreviewShuttle(float rate)
         {
+            PostProductionExport.ThrowIfExporting("postprod.preview.shuttle");
             if (rate != 0f && !SketchMemoryScript.m_Instance.IsPlayingBack)
             {
                 throw new System.InvalidOperationException(
@@ -522,6 +579,7 @@ namespace TiltBrush
         )]
         public static void RevertPostProdSpatialOffset(int target)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.revert");
             PostProductionAlignment.Revert(target);
         }
 
@@ -532,6 +590,7 @@ namespace TiltBrush
         )]
         public static void ResetPostProdSpatialOffset(int target)
         {
+            PostProductionExport.ThrowIfExporting("postprod.offset.spatial.reset");
             PostProductionAlignment.Reset(target);
         }
 
@@ -543,6 +602,7 @@ namespace TiltBrush
         public static void SetPostProdLens(float fx, float fy, float cx, float cy,
             float k1, float k2, float p1, float p2, float k3)
         {
+            PostProductionExport.ThrowIfExporting("postprod.lens");
             PostProductionLens.SetCalibration(fx, fy, cx, cy, k1, k2, p1, p2, k3);
         }
 
@@ -591,7 +651,26 @@ namespace TiltBrush
         )]
         public static void SetPostProdPreviewLiveCgBloom(bool enabled)
         {
+            PostProductionExport.ThrowIfExporting("postprod.preview.livecg.bloom");
             PostProductionLiveCg.Bloom = enabled;
+        }
+
+        [ApiEndpoint(
+            "postprod.depth.filter",
+            "How the real footage's depth is sampled, in the preview and the export: nearest (the default: never blends across a depth edge, which would change what is occluded) or bilinear (smoother, for depth that was upscaled smoothly). Saved with the sketch (postprod.metadata.save). Read back in query.postprod.preview.settings",
+            "nearest"
+        )]
+        public static void SetPostProdDepthFilter(string filter)
+        {
+            PostProductionExport.ThrowIfExporting("postprod.depth.filter");
+            switch (filter)
+            {
+                case "nearest": PostProductionSettings.DepthNearest = true; break;
+                case "bilinear": PostProductionSettings.DepthNearest = false; break;
+                default:
+                    throw new System.ArgumentException(
+                        $"postprod.depth.filter: \"{filter}\" is not nearest or bilinear");
+            }
         }
 
         [ApiEndpoint(
@@ -648,17 +727,26 @@ namespace TiltBrush
             PostProdCompositor.DebugDepthColorAlignment(cgColorPath, cgDepthPath, outputPath);
         }
 
-        private static void LoadNamedFile(string filename, bool realTime)
+        private static void LoadNamedFile(string filename, bool realTime, bool quickload = false)
         {
+            PostProductionExport.ThrowIfExporting("load");
             if (!filename.EndsWith(SaveLoadScript.TILT_SUFFIX))
             {
                 filename += SaveLoadScript.TILT_SUFFIX;
             }
             string path = GetSafePathInDirectory(App.UserSketchPath(), filename, "sketch filename");
+            // A playback kept alive by sketch.scrub must be finished while the old strokes'
+            // layers still exist, as New Sketch does: the load resets the layers before its own
+            // ClearMemory, which would then finish the playback into destroyed geometry.
+            var sketchMemory = SketchMemoryScript.m_Instance;
+            if (sketchMemory.m_KeepPlaybackAliveForScrubbing && sketchMemory.IsPlayingBack)
+            {
+                sketchMemory.ClearMemory();
+            }
             if (realTime)
             {
                 SketchControlsScript.m_Instance.LoadNamedFileWithPlaybackMode(
-                    path, SketchMemoryScript.PlaybackMode.RealTime);
+                    path, SketchMemoryScript.PlaybackMode.RealTime, quickload);
             }
             else
             {

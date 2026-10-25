@@ -37,6 +37,10 @@ namespace TiltBrush
         // error) is recorded here explicitly rather than only thrown/logged.
         public static string LastStatus { get; private set; } = "not saved yet";
 
+        // Editor Play sessions keep static state (no domain reload).
+        [UnityEngine.RuntimeInitializeOnLoadMethod(UnityEngine.RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState() => LastStatus = "not saved yet";
+
         public static string Save(string path)
         {
             string result;

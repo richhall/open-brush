@@ -5336,10 +5336,10 @@ namespace TiltBrush
         }
 
         public void LoadNamedFileWithPlaybackMode(
-            string path, SketchMemoryScript.PlaybackMode playbackMode)
+            string path, SketchMemoryScript.PlaybackMode playbackMode, bool quickload = false)
         {
             LoadNamed(
-                path, quickload: false, additive: false,
+                path, quickload: quickload, additive: false,
                 playbackModeOverride: playbackMode);
         }
 
@@ -5442,10 +5442,9 @@ namespace TiltBrush
             QualityControls.m_Instance.ResetAutoQuality();
             InputManager.m_Instance.TriggerHaptics(InputManager.ControllerName.Brush, 0.1f);
             SaveLoadScript.m_Instance.ResetLastFilename();
-            // Post-production: a new sketch has no clip, and the control page should clear.
-            PostProductionClip.Clear();
-            PostProductionSettings.LoadedSketchName = "";
-            PostProductionSettings.LoadCount++;
+            // Post-production: a new sketch ends the session (preview, camera, clip, offsets),
+            // and the control page clears.
+            PostProductionPreviewController.EndSession();
             SelectionManager.m_Instance.RemoveFromSelection(false);
             PointerManager.m_Instance.ResetSymmetryToHome();
             PointerManager.m_Instance.FinalizeLine(false, true);

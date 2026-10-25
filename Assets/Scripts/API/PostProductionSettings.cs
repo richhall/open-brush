@@ -27,6 +27,29 @@ namespace TiltBrush
     // this is a pure data layer with no visual effect, same as the temporal offsets.
     public static class PostProductionSettings
     {
+        // The Editor's Enter Play Mode Options keep static state between Play sessions (no
+        // domain reload), so each session starts with nothing loaded, as a build does.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            LoadCount = 0;
+            ClearSession();
+        }
+
+        // Everything a sketch or clip set up for post-production (New Sketch ends the session).
+        public static void ClearSession()
+        {
+            GlobalTimeOffsetMs = 0;
+            LoadedSketchName = "";
+            SourceFps = DefaultSourceFps;
+            CropStartFrame = null;
+            CropEndFrame = null;
+            DepthNearest = true;
+            GlobalSpatialOffset = TrTransform.identity;
+            SavedGlobalSpatialOffset = TrTransform.identity;
+            ClearLayerOffsets();
+        }
+
         public static int GlobalTimeOffsetMs { get; set; } = 0;
 
         // Incremented each time a sketch's post-production settings have been restored on
@@ -94,6 +117,11 @@ namespace TiltBrush
         // deliberately not defaulted to the depth bake's own first/last frame, since
         // that range was chosen for ingestion convenience, not necessarily the exact
         // performance bounds.
+        // Plate depth is sampled at the nearest texel by default: interpolating across a depth
+        // edge invents in-between depths that change what is occluded. Bilinear is offered
+        // for depth that has been upscaled smoothly (postprod.depth.filter, saved per sketch).
+        public static bool DepthNearest { get; set; } = true;
+
         public static int? CropStartFrame { get; set; }
         public static int? CropEndFrame { get; set; }
 
