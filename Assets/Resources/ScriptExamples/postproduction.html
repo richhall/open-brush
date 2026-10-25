@@ -19,6 +19,7 @@
         .titlerow h3 {margin: 0 12px 0 0;}
         .titlerow .label {color: #666; font-size: 13px;}
         .titlerow .value {font-family: monospace; font-size: 13px; margin-right: 8px;}
+        .titlerow button {margin-left: auto; align-self: center;}
         /* Sits in workflow order after View, then stays pinned once scrolled to. */
         .timeline {position: sticky; top: 0; z-index: 10; background: #fff; border-top: 1px solid #ccc;
             border-bottom: 1px solid #ccc; padding: 6px 0 4px; margin: 14px 0 8px;}
@@ -61,6 +62,8 @@
         <h3>Post-production</h3>
         <span class="label">Sketch</span> <span class="value" id="barSketch">-</span>
         <span class="label">Clip</span> <span class="value" id="barClip">-</span>
+        <button onclick="savePostProdMetadata()"
+            title="Saves only the post-production settings (the sketch's PostProduction block: clip folder, offsets, export range, visible layers, depth filter). The strokes and the rest of the sketch are never changed. Nothing auto-saves.">Save post-production settings</button>
     </div>
     <details id="secLoad" open>
         <summary>Load</summary>
@@ -108,9 +111,6 @@
             finishes or is cancelled (Export, below). The Game window shows the frames being written.</div>
         <div class="row-line">
             <b>Timeline</b>
-            <span class="sep"></span>
-            <button onclick="savePostProdMetadata()"
-                title="Saves the clip folder, offsets, export range, visible layers and depth filter into the sketch. Never touches the strokes. Nothing auto-saves.">Save</button>
         </div>
         <input type="range" id="scrub" min="0" max="320000" value="0" oninput="onScrubDrag()" onchange="onScrub()">
         <div class="row-line">
